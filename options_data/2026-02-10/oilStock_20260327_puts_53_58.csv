@@ -1,0 +1,3 @@
+contractSymbol,lastTradeDate,strike,lastPrice,volume,inTheMoney,IV_yf,underlyingPriceAtTrade,impliedVolatility,riskFreeRate
+XLE260327P00045000,2026-02-10 16:42:38+00:00,45.0,0.21,32.0,0,34.9616,53.4996,35.8077,0.0364
+XLE260327P00050000,2026-02-10 18:58:25+00:00,50.0,0.6,18.0,0,29.7126,53.545,26.9087,0.0364
