@@ -49,7 +49,7 @@ def get_risk_free_rate():
         if not hist.empty:
             # ^IRX is quoted as annual percentage, convert to decimal
             rate = hist['Close'].iloc[-1] / 100.0
-            return rate
+            return rate.round(3)
         else:
             print("Warning: Could not fetch risk-free rate, using default 0.04")
             return 0.04
