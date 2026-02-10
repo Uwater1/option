@@ -345,7 +345,7 @@ for name, ticker_symbol in TICKERS.items():
                     print(f"  Saved {len(cleaned_puts)} puts to {os.path.basename(puts_file)}")
 
                 # Sleep to prevent rate limiting
-                time.sleep(0.4)
+                time.sleep(0.5)
 
             except Exception as e:
                 print(f"  Error fetching {date} for {name}: {e}")
@@ -356,8 +356,3 @@ for name, ticker_symbol in TICKERS.items():
 print("\n" + "="*50)
 print("Options download complete.")
 print(f"Data saved to: {date_folder}")
-        print(f"\n❌ No data was downloaded successfully.")
-
-
-if __name__ == "__main__":
-    main()
