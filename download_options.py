@@ -28,6 +28,17 @@ TICKERS = {
     "LongTerm" : "TLT",
 }
 
+# Mapping of tickers to their corresponding CBOE volatility indices
+VOLATILITY_MAP = {
+    "SPY": "^VIX",
+    "QQQ": "^VXN",
+    "GLD": "^GVZ",
+    "AMZN": "^VXAZN",
+    "AAPL": "^VXAPL",
+    "GOOG": "^VXGOG",
+}
+
+
 current_date = datetime.now().strftime("%Y-%m-%d")
 base_folder = "options_data"
 date_folder = os.path.join(base_folder, current_date)
@@ -203,7 +214,7 @@ def get_stock_price_at_time(ticker_symbol, target_datetime, current_price):
         print(f"    Error getting price at time {target_datetime}: {e}")
         return np.float32(current_price)
 
-def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expiration_date, option_type):
+def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expiration_date, option_type, vol_index_symbol=None):
     """
     Compresses and formats the options DataFrame according to specific rules.
     Adds underlying price at lastTradeDate time. Prices stored as float32.
@@ -212,6 +223,7 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
     Args:
         expiration_date: expiration date string 'YYYY-MM-DD'
         option_type: 'call' or 'put'
+        vol_index_symbol: optional CBOE volatility index symbol (e.g., '^VIX')
     """
     if df is None or df.empty:
         return df
@@ -279,80 +291,105 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
     # 7. Add risk-free rate column
     df['riskFreeRate'] = np.float32(risk_free_rate)
 
+    # 8. Add volatility index value
+    if vol_index_symbol:
+        print(f"    Adding volatility index ({vol_index_symbol})...")
+        if 'lastTradeDate' in df.columns:
+            df['volatilityIndex'] = df['lastTradeDate'].apply(
+                lambda x: get_stock_price_at_time(vol_index_symbol, x, np.nan) if pd.notna(x) else np.float32(np.nan)
+            ).astype(np.float32)
+        else:
+            # Fallback to current value if no trade date column (though we expect one)
+            vol_tk = yf.Ticker(vol_index_symbol)
+            vol_hist = vol_tk.history(period="1d")
+            vol_val = vol_hist['Close'].iloc[-1] if not vol_hist.empty else np.nan
+            df['volatilityIndex'] = np.float32(vol_val)
+
     return df
 
-# Get risk-free rate once at the start
-risk_free_rate = get_risk_free_rate() + 0.0005 # actual option market rate is higher than risk free rate
-print(f"Risk-free rate (^IRX): {risk_free_rate:.4f} ({risk_free_rate*100:.2f}%)")
-print(f"Starting options download for {current_date}...")
+if __name__ == "__main__":
+    # Get risk-free rate once at the start
+    risk_free_rate = get_risk_free_rate() + 0.0005 # actual option market rate is higher than risk free rate
+    print(f"Risk-free rate (^IRX): {risk_free_rate:.4f} ({risk_free_rate*100:.2f}%)")
+    print(f"Starting options download for {current_date}...")
 
-for name, ticker_symbol in TICKERS.items():
-    print(f"\nProcessing {name} ({ticker_symbol})...")
-    # Clear intraday cache between tickers to save memory
-    _intraday_cache.clear()
+    for name, ticker_symbol in TICKERS.items():
+        print(f"\nProcessing {name} ({ticker_symbol})...")
+        # Clear intraday cache between tickers to save memory
+        _intraday_cache.clear()
 
-    try:
-        tk = yf.Ticker(ticker_symbol)
-
-        # Get current/closing price
         try:
-            hist = tk.history(period="1d")
-            if not hist.empty:
-                current_price = np.float32(hist['Close'].iloc[-1])
-            else:
-                current_price = np.float32(tk.info.get('regularMarketPrice', 0))
+            tk = yf.Ticker(ticker_symbol)
 
-            print(f"  Current price: ${current_price:.2f}")
-        except Exception as e:
-            print(f"  Error getting current price: {e}")
-            current_price = np.float32(0)
-
-        # Get expiration dates
-        try:
-            expirations = tk.options
-        except Exception:
-            print(f"  No options found for {name} (or API error). Skipping.")
-            continue
-
-        if not expirations:
-            print(f"  No options found for {name}. Skipping.")
-            continue
-
-        print(f"  Found {len(expirations)} expiration dates.")
-
-        # Loop through expirations
-        for date in expirations:
+            # Get current/closing price
             try:
-                # Download option chain
-                chain = tk.option_chain(date)
+                hist = tk.history(period="1d")
+                if not hist.empty:
+                    current_price = np.float32(hist['Close'].iloc[-1])
+                else:
+                    current_price = np.float32(tk.info.get('regularMarketPrice', 0))
 
-                # Format filename: options_data/2026-02-10/aapl_20260217_calls_150_50.csv
-                safe_date = date.replace("-", "")
-                price_str = f"{current_price:.2f}".replace(".", "_")
-                calls_file = os.path.join(date_folder, f"{name}_{safe_date}_calls_{price_str}.csv")
-                puts_file = os.path.join(date_folder, f"{name}_{safe_date}_puts_{price_str}.csv")
-
-                # Process and Save Calls
-                if chain.calls is not None and not chain.calls.empty:
-                    cleaned_calls = process_options_df(chain.calls.copy(), ticker_symbol, current_price, risk_free_rate, date, 'call')
-                    cleaned_calls.to_csv(calls_file, index=False)
-                    print(f"  Saved {len(cleaned_calls)} calls to {os.path.basename(calls_file)}")
-
-                # Process and Save Puts
-                if chain.puts is not None and not chain.puts.empty:
-                    cleaned_puts = process_options_df(chain.puts.copy(), ticker_symbol, current_price, risk_free_rate, date, 'put')
-                    cleaned_puts.to_csv(puts_file, index=False)
-                    print(f"  Saved {len(cleaned_puts)} puts to {os.path.basename(puts_file)}")
-
-                # Sleep to prevent rate limiting
-                time.sleep(0.5)
-
+                print(f"  Current price: ${current_price:.2f}")
             except Exception as e:
-                print(f"  Error fetching {date} for {name}: {e}")
+                print(f"  Error getting current price: {e}")
+                current_price = np.float32(0)
 
-    except Exception as e:
-        print(f"Failed to retrieve data for {name}: {e}")
+            # Get expiration dates
+            try:
+                expirations = tk.options
+            except Exception:
+                print(f"  No options found for {name} (or API error). Skipping.")
+                continue
 
-print("\n" + "="*50)
-print("Options download complete.")
-print(f"Data saved to: {date_folder}")
+            if not expirations:
+                print(f"  No options found for {name}. Skipping.")
+                continue
+
+            print(f"  Found {len(expirations)} expiration dates.")
+
+            # Loop through expirations
+            for date in expirations:
+                try:
+                    # Download option chain
+                    chain = tk.option_chain(date)
+
+                    # Format filename: options_data/2026-02-10/aapl_20260217_calls_150_50.csv
+                    safe_date = date.replace("-", "")
+                    price_str = f"{current_price:.2f}".replace(".", "_")
+                    calls_file = os.path.join(date_folder, f"{name}_{safe_date}_calls_{price_str}.csv")
+                    puts_file = os.path.join(date_folder, f"{name}_{safe_date}_puts_{price_str}.csv")
+
+                    # Get volatility index if mapped
+                    vol_symbol = VOLATILITY_MAP.get(ticker_symbol)
+
+                    # Process and Save Calls
+                    if chain.calls is not None and not chain.calls.empty:
+                        cleaned_calls = process_options_df(
+                            chain.calls.copy(), ticker_symbol, current_price, 
+                            risk_free_rate, date, 'call', vol_symbol
+                        )
+                        cleaned_calls.to_csv(calls_file, index=False)
+                        print(f"  Saved {len(cleaned_calls)} calls to {os.path.basename(calls_file)}")
+
+                    # Process and Save Puts
+                    if chain.puts is not None and not chain.puts.empty:
+                        cleaned_puts = process_options_df(
+                            chain.puts.copy(), ticker_symbol, current_price, 
+                            risk_free_rate, date, 'put', vol_symbol
+                        )
+                        cleaned_puts.to_csv(puts_file, index=False)
+                        print(f"  Saved {len(cleaned_puts)} puts to {os.path.basename(puts_file)}")
+
+                    # Sleep to prevent rate limiting
+                    time.sleep(0.5)
+
+                except Exception as e:
+                    print(f"  Error fetching {date} for {name}: {e}")
+
+        except Exception as e:
+            print(f"Failed to retrieve data for {name}: {e}")
+
+    print("\n" + "="*50)
+    print("Options download complete.")
+    print(f"Data saved to: {date_folder}")
+
