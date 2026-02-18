@@ -2,3 +2,5 @@ yfinance
 pandas
 numpy
 scipy
+scikit-learn
+xgboost    
