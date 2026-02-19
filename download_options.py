@@ -119,24 +119,39 @@ def calculate_iv_vectorized(market_prices, S_arr, K_arr, T, r, is_call, tol=1e-6
 
     # --- Newton-Raphson (50 iterations) ---
     converged = np.zeros(len(idx), dtype=bool)
+    gave_up = np.zeros(len(idx), dtype=bool)
     for _ in range(50):
-        active = ~converged
+        active = ~(converged | gave_up)
         if not active.any():
             break
+        
+        # 1. Compute price and check convergence BEFORE updating sigma
         price = _bs_price_vec(S[active], K[active], Tv[active], r, sigma[active], ic[active])
+        conv_now = np.abs(price - mp[active]) < tol
+        if conv_now.any():
+            converged[np.where(active)[0][conv_now]] = True
+            # Re-evaluate active and slice price for remaining items
+            active = ~(converged | gave_up)
+            if not active.any():
+                break
+            price = price[~conv_now]
+
+        # 2. Newton step for remaining active
         vega = _bs_vega_vec(S[active], K[active], Tv[active], r, sigma[active])
         good_vega = vega > 1e-12
         update = np.zeros_like(sigma[active])
         update[good_vega] = (price[good_vega] - mp[active][good_vega]) / vega[good_vega]
         new_sigma = sigma[active] - update
-        # Mark bad updates
+        
+        # 3. Handle bad steps by giving up on NR (falling back to bisection)
         bad = (new_sigma <= 0) | (~good_vega)
-        new_sigma[bad] = sigma[active][bad]  # keep old sigma for bad ones
-        sigma[active] = new_sigma
-        # Check convergence
-        conv_now = np.abs(price - mp[active]) < tol
-        conv_indices = np.where(active)[0][conv_now]
-        converged[conv_indices] = True
+        if bad.any():
+            gave_up[np.where(active)[0][bad]] = True
+            
+        # Update sigma only for those that didn't give up
+        good_mask = ~bad
+        if good_mask.any():
+            sigma[np.where(active)[0][good_mask]] = new_sigma[good_mask]
 
     # --- Bisection fallback for unconverged (cap 50.0 = 5000%) ---
     need_bisect = ~converged
@@ -272,9 +287,18 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
         ).astype(np.float32)
 
     # 6. Calculate Black-Scholes IV using custom risk-free rate (vectorized)
-    exp_dt = datetime.strptime(expiration_date, '%Y-%m-%d')
-    today = datetime.now()
-    T = max((exp_dt - today).days / 365.0, 1 / 365.0)  # time to expiry in years, min 1 day
+    exp_dt = pd.to_datetime(expiration_date).tz_localize('UTC')
+    
+    if 'lastTradeDate' in df.columns:
+        ltd = pd.to_datetime(df['lastTradeDate'], utc=True)
+        # Time to expiry in years (using 365 days), more precise than integer days
+        T_arr = (exp_dt - ltd).dt.total_seconds() / (365.0 * 24 * 3600)
+        # Fallback for missing dates or very near-expiry: at least 1 day
+        T_arr = T_arr.fillna((exp_dt - pd.Timestamp.now(tz='UTC')).total_seconds() / (365.0 * 24 * 3600))
+        T_arr = np.maximum(T_arr, 1.0 / 365.0).values.astype(np.float64)
+    else:
+        now = pd.Timestamp.now(tz='UTC')
+        T_arr = max((exp_dt - now).total_seconds() / (365.0 * 24 * 3600), 1 / 365.0)
 
     S_arr = df['underlyingPriceAtTrade'].values.astype(np.float64) if 'underlyingPriceAtTrade' in df.columns else np.full(len(df), float(current_price))
     # Fill NaN/zero S with current_price
@@ -285,8 +309,8 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
     mp_arr = df['lastPrice'].values.astype(np.float64) if 'lastPrice' in df.columns else np.full(len(df), np.nan)
     is_call = np.full(len(df), option_type == 'call')
 
-    print(f"    Calculating Black-Scholes IV (T={T:.4f}y, r={risk_free_rate:.4f}, type={option_type}, n={len(df)})...")
-    df['impliedVolatility'] = calculate_iv_vectorized(mp_arr, S_arr, K_arr, T, float(risk_free_rate), is_call)
+    print(f"    Calculating Black-Scholes IV (n={len(df)}, r={risk_free_rate:.4f}, type={option_type})...")
+    df['impliedVolatility'] = calculate_iv_vectorized(mp_arr, S_arr, K_arr, T_arr, float(risk_free_rate), is_call)
 
     # 7. Add risk-free rate column
     df['riskFreeRate'] = np.float32(risk_free_rate)
