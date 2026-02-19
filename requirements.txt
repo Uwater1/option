@@ -3,4 +3,5 @@ pandas
 numpy
 scipy
 scikit-learn
-xgboost    
+xgboost
+numba
