@@ -48,26 +48,7 @@ def enrich_data(df):
     return df
 
 def prepare_features(df):
-    """
-    Mapping to 'pricing.py' feature names:
-    pricing.py expects: strike, underlying, days, vix, is_put
-    
-    BUT the model trained here must match what pricing.py uses for prediction.
-    pricing.py:
-        df['log_moneyness'] = np.log(df['strike'] / df['underlying'])
-        ...
-        ['log_moneyness', 'moneyness_sq', 'days', 'sqrt_dte', 'is_put', 'vix', 'vix_sq', 'vix_x_dte']
-    
-    So we must map our training data columns to these names.
-    Training Data cols: strikePrice, underlyingPriceAtTrade, daysToExpiration, volatilityIndex, is_put
-    """
     df = df.copy()
-    
-    # Rename training cols to match pricing.py expected input cols
-    # strikePrice -> strike
-    # underlyingPriceAtTrade -> underlying
-    # daysToExpiration -> days
-    # volatilityIndex -> vix
     
     rename_map = {
         'strikePrice': 'strike',
@@ -77,32 +58,49 @@ def prepare_features(df):
     }
     df = df.rename(columns=rename_map)
     
-    # Ensure numerical types
     cols = ['strike', 'underlying', 'days', 'vix', 'is_put']
     for c in cols:
         df[c] = pd.to_numeric(df[c], errors='coerce')
-        
     df = df.dropna(subset=cols)
+    df = df[df['days'] >= 0.9]
     
-    # Now use exact logic from pricing.py
     df['log_moneyness'] = np.log(df['strike'] / df['underlying'])
     df['moneyness_sq'] = df['log_moneyness'] ** 2
     
-    df = df[df['days'] >= 0]
-    df['sqrt_dte'] = np.sqrt(df['days'])
+    df['sqrt_dte'] = np.sqrt(np.maximum(df['days'], 0.001))
+    df['inv_dte'] = 1.0 / np.maximum(df['days'], 0.001)
     
     df['vix_sq'] = df['vix'] ** 2
     df['vix_x_dte'] = df['vix'] * df['sqrt_dte']
+    df['vix_x_log_moneyness'] = df['vix'] * df['log_moneyness']
+    
+    # Bucketed Moneyness
+    # Normalized OTM amount: Positive = OTM, Negative = ITM
+    # Call: log_mon > 0 is OTM -> log_mon
+    # Put: log_mon < 0 is OTM -> -log_mon
+    df['otm_amount'] = df['log_moneyness'] * (1 - 2 * df['is_put'])
+    
+    # 5-Bucket Moneyness
+    df['is_atm'] = (np.abs(df['otm_amount']) <= 0.02).astype(int)
+    df['is_otm'] = ((df['otm_amount'] > 0.02) & (df['otm_amount'] <= 0.1)).astype(int)
+    df['is_deep_otm'] = (df['otm_amount'] > 0.1).astype(int)
+    df['is_itm'] = ((df['otm_amount'] < -0.02) & (df['otm_amount'] >= -0.1)).astype(int)
+    df['is_deep_itm'] = (df['otm_amount'] < -0.1).astype(int)
+    
+    # Bucketed DTE
+    df['dte_under_15'] = (df['days'] < 15).astype(int)
+    df['dte_15_to_40'] = ((df['days'] >= 15) & (df['days'] <= 40)).astype(int)
+    df['dte_over_40'] = (df['days'] > 40).astype(int)
+    
+    # ATM IV proxy from VIX (matches pricing.py)
+    df['atm_iv_proxy'] = df['vix'] / 100.0
     
     features = [
-        'log_moneyness', 
-        'moneyness_sq', 
-        'days', 
-        'sqrt_dte', 
-        'is_put', 
-        'vix', 
-        'vix_sq', 
-        'vix_x_dte'
+        'log_moneyness', 'moneyness_sq', 'days', 'sqrt_dte', 'inv_dte', 
+        'is_put', 'vix', 'vix_sq', 'vix_x_dte', 'vix_x_log_moneyness',
+        'is_atm', 'is_otm', 'is_deep_otm', 'is_itm', 'is_deep_itm',
+        'dte_under_15', 'dte_15_to_40', 'dte_over_40',
+        'atm_iv_proxy'
     ]
     
     return df, features
@@ -132,7 +130,13 @@ def load_data_from_range(data_dir, date_range):
                 if 'lastPrice' in df.columns:
                      df = df[df['lastPrice'] > 0.01]
                 if 'volume' in df.columns:
-                     df = df[df['volume'] >= 5]
+                     df = df[df['volume'] >= 10]
+
+                # Filter extreme IVs and near-expiration options
+                if 'impliedVolatility' in df.columns:
+                    df = df[(df['impliedVolatility'] > 1.0) & (df['impliedVolatility'] < 150.0)]
+                if 'daysToExpiration' in df.columns:
+                    df = df[df['daysToExpiration'] >= 0.9]
 
                 required = ['strikePrice', 'underlyingPriceAtTrade', 'daysToExpiration', 'volatilityIndex', 'is_put', 'impliedVolatility']
                 if not all(col in df.columns for col in required):
@@ -149,64 +153,120 @@ def load_data_from_range(data_dir, date_range):
         return pd.concat(all_data, ignore_index=True)
     return pd.DataFrame()
 
+def huber_loss(y_true, y_pred, delta=1.0):
+    """Calculate Huber loss."""
+    residual = np.abs(y_true - y_pred)
+    quadratic = np.minimum(residual, delta)
+    linear = residual - quadratic
+    return np.mean(0.5 * quadratic ** 2 + delta * linear)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="options_data")
     args = parser.parse_args()
     
-    # 1. Define Date Ranges
-    train_dates = pd.date_range(start="2026-02-10", end="2026-02-17").strftime("%Y-%m-%d").tolist()
-    test_dates = ["2026-02-18"]
+    # 1. Load full dataset (Dynamic listing from data directory)
+    all_dates = sorted([
+        d for d in os.listdir(args.data_dir) 
+        if os.path.isdir(os.path.join(args.data_dir, d)) and re.match(r'^\d{4}-\d{2}-\d{2}$', d)
+    ])
     
-    print("--- Training Phase ---")
-    train_df = load_data_from_range(args.data_dir, train_dates)
-    if train_df.empty:
-        print("No training data found!")
+    if not all_dates:
+        print(f"Error: No date directories found in {args.data_dir}")
         return
-        
-    print(f"Training samples: {len(train_df)}")
     
-    X_train_full, feature_names = prepare_features(train_df)
-    X_train = X_train_full[feature_names]
-    y_train = train_df.loc[X_train.index, 'impliedVolatility']
+    print(f"Found {len(all_dates)} dates: {all_dates[0]} to {all_dates[-1]}")    
+    print("--- Loading Data ---")
+    full_df = load_data_from_range(args.data_dir, all_dates)
+    if full_df.empty:
+        print("No data found!")
+        return
+    print(f"Total samples after filtering: {len(full_df)}")
     
-    model = xgb.XGBRegressor(objective='reg:squarederror', n_estimators=200, max_depth=8, learning_rate=0.05)
-    model.fit(X_train, y_train)
+    # 2. Prepare features
+    X_full, feature_names = prepare_features(full_df)
+    X = X_full[feature_names]
+    y_raw = full_df.loc[X.index, 'impliedVolatility']
+    
+    # Log-transform the target
+    y = np.log(y_raw)
+    
+    # 3. Train/Validation split (80/20, shuffled)
+    from sklearn.model_selection import train_test_split
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    print(f"Training samples: {len(X_train)}")
+    print(f"Validation samples: {len(X_val)}")
+    
+    # 4. Train with early stopping
+    print("\n--- Training Phase ---")
+    model = xgb.XGBRegressor(
+        objective='reg:squarederror',
+        n_estimators=1000,
+        max_depth=8,
+        learning_rate=0.05,
+        early_stopping_rounds=50,
+        eval_metric='rmse'
+    )
+    model.fit(
+        X_train, y_train,
+        eval_set=[(X_val, y_val)],
+        verbose=50
+    )
     model.save_model(MODEL_FILE)
-    print(f"Model saved to {MODEL_FILE}")
+    print(f"\nModel saved to {MODEL_FILE}")
+    print(f"Best iteration: {model.best_iteration}")
     
-    # 2. Testing Phase
-    print("\n--- Testing Phase ---")
-    test_df = load_data_from_range(args.data_dir, test_dates)
-    if test_df.empty:
-        print("No testing data found!")
-        return
-
-    print(f"Testing samples: {len(test_df)}")
+    # 5. Evaluate on the full validation set
+    y_val_pred_log = model.predict(X_val)
+    y_val_pred = np.exp(y_val_pred_log)
+    y_val_actual = np.exp(y_val)
     
-    X_test_full, _ = prepare_features(test_df)
-    X_test = X_test_full[feature_names]
-    y_test = test_df.loc[X_test.index, 'impliedVolatility']
+    mse = mean_squared_error(y_val_actual, y_val_pred)
+    mae = mean_absolute_error(y_val_actual, y_val_pred)
+    r2 = r2_score(y_val_actual, y_val_pred)
+    huber = huber_loss(y_val_actual, y_val_pred, delta=1.0)
     
-    y_pred = model.predict(X_test)
+    print("\n" + "=" * 55)
+    print("Model Quality Metrics (Validation Set):")
+    print("=" * 55)
+    print(f"RMSE:       {np.sqrt(mse):.4f}")
+    print(f"MAE:        {mae:.4f}")
+    print(f"R²:         {r2:.4f}")
+    print(f"Huber Loss: {huber:.4f}  (delta=1.0)")
     
-    # Metrics
-    mse = mean_squared_error(y_test, y_pred)
-    mae = mean_absolute_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
+    # 6. Error analysis
+    val_df = X_val.copy()
+    val_df['actual_IV'] = y_val_actual.values
+    val_df['predicted_IV'] = y_val_pred
+    val_df['abs_error'] = np.abs(val_df['predicted_IV'] - val_df['actual_IV'])
     
-    print("\nModel Quality Metrics (Test Set 2026-02-18):")
-    print(f"RMSE: {np.sqrt(mse):.4f}")
-    print(f"MAE:  {mae:.4f}")
-    print(f"R²:   {r2:.4f}")
+    print("\n--- Top 10 Worst Predictions ---")
+    worst = val_df.nlargest(10, 'abs_error')[['log_moneyness', 'days', 'vix', 'is_put', 'actual_IV', 'predicted_IV', 'abs_error']]
+    print(worst.to_string(index=False))
     
-    # Error analysis
-    test_df_subset = test_df.loc[X_test.index].copy()
-    test_df_subset['predicted_IV'] = y_pred
-    test_df_subset['error'] = test_df_subset['predicted_IV'] - test_df_subset['impliedVolatility']
+    # Per-bucket error analysis
+    print("\n--- Error by Moneyness Bucket ---")
+    for name, mask in [
+        ('Deep ITM', val_df['is_deep_itm'] == 1),
+        ('ITM', val_df['is_itm'] == 1),
+        ('ATM', val_df['is_atm'] == 1),
+        ('OTM', val_df['is_otm'] == 1),
+        ('Deep OTM', val_df['is_deep_otm'] == 1)
+    ]:
+        subset = val_df[mask]
+        if len(subset) > 0:
+            bucket_mae = np.mean(subset['abs_error'])
+            bucket_rmse = np.sqrt(np.mean(subset['abs_error'] ** 2))
+            print(f"  {name:10s}  n={len(subset):5d}  MAE={bucket_mae:.4f}  RMSE={bucket_rmse:.4f}")
     
-    print("\nSample Predictions:")
-    print(test_df_subset[['strikePrice', 'daysToExpiration', 'impliedVolatility', 'predicted_IV', 'error']].head(10))
+    print("\n--- Error by DTE Bucket ---")
+    for name, mask in [('<15d', val_df['dte_under_15'] == 1), ('15-40d', val_df['dte_15_to_40'] == 1), ('>40d', val_df['dte_over_40'] == 1)]:
+        subset = val_df[mask]
+        if len(subset) > 0:
+            bucket_mae = np.mean(subset['abs_error'])
+            bucket_rmse = np.sqrt(np.mean(subset['abs_error'] ** 2))
+            print(f"  {name:10s}  n={len(subset):5d}  MAE={bucket_mae:.4f}  RMSE={bucket_rmse:.4f}")
 
 if __name__ == "__main__":
     main()

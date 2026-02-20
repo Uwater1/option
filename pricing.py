@@ -77,31 +77,44 @@ def calculate_greeks_numba(S, K, T, r, sigma, is_put):
 
 # --- FEATURE PREP ---
 def prepare_features(df):
-    """
-    Prepare features for the XGBoost model.
-    Expects numerical columns: strike, underlying, days, vix, is_put
-    """
     df = df.copy()
     
-    # Calculations
     df['log_moneyness'] = np.log(df['strike'] / df['underlying'])
     df['moneyness_sq'] = df['log_moneyness'] ** 2
     
     # Avoid negative sqrt
-    df['sqrt_dte'] = np.sqrt(df['days'])
+    df['sqrt_dte'] = np.sqrt(np.maximum(df['days'], 0.001))
+    df['inv_dte'] = 1.0 / np.maximum(df['days'], 0.001)
     
     df['vix_sq'] = df['vix'] ** 2
     df['vix_x_dte'] = df['vix'] * df['sqrt_dte']
+    df['vix_x_log_moneyness'] = df['vix'] * df['log_moneyness']
+    
+    # Bucketed Moneyness
+    # Normalized OTM amount: Positive = OTM, Negative = ITM
+    df['otm_amount'] = df['log_moneyness'] * (1 - 2 * df['is_put'])
+    
+    # 5-Bucket Moneyness
+    df['is_atm'] = (np.abs(df['otm_amount']) <= 0.02).astype(int)
+    df['is_otm'] = ((df['otm_amount'] > 0.02) & (df['otm_amount'] <= 0.1)).astype(int)
+    df['is_deep_otm'] = (df['otm_amount'] > 0.1).astype(int)
+    df['is_itm'] = ((df['otm_amount'] < -0.02) & (df['otm_amount'] >= -0.1)).astype(int)
+    df['is_deep_itm'] = (df['otm_amount'] < -0.1).astype(int)
+    
+    # Bucketed DTE
+    df['dte_under_15'] = (df['days'] < 15).astype(int)
+    df['dte_15_to_40'] = ((df['days'] >= 15) & (df['days'] <= 40)).astype(int)
+    df['dte_over_40'] = (df['days'] > 40).astype(int)
+    
+    # atm_iv_proxy from vix
+    df['atm_iv_proxy'] = df['vix'] / 100.0
     
     features = [
-        'log_moneyness', 
-        'moneyness_sq', 
-        'days', 
-        'sqrt_dte', 
-        'is_put', 
-        'vix', 
-        'vix_sq', 
-        'vix_x_dte'
+        'log_moneyness', 'moneyness_sq', 'days', 'sqrt_dte', 'inv_dte', 
+        'is_put', 'vix', 'vix_sq', 'vix_x_dte', 'vix_x_log_moneyness',
+        'is_atm', 'is_otm', 'is_deep_otm', 'is_itm', 'is_deep_itm',
+        'dte_under_15', 'dte_15_to_40', 'dte_over_40',
+        'atm_iv_proxy'
     ]
     return df[features]
 
@@ -146,7 +159,8 @@ def main():
         df = pd.DataFrame(data)
         
         X = prepare_features(df)
-        predicted_iv = model.predict(X)[0]
+        predicted_iv_log = model.predict(X)[0]
+        predicted_iv = np.exp(predicted_iv_log)
         
         sigma = predicted_iv / 100.0
         T = args.days / 365.0
