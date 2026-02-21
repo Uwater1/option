@@ -17,9 +17,9 @@ MODEL_FILE = "iv_surface_prod.json"
 # ── Asset-class lookup tables ────────────────────────────────────────────────
 # Keys are the lowercase ticker prefix used in CSV filenames; values are the
 # canonical Yahoo Finance / brokerage symbol (kept for reference).
-COMMODITY_TICKERS = {"gold", "silver", "LongTerm"}   # gold, silver, LongTerm-bond ETF
+COMMODITY_TICKERS = {"gold", "silver", "longterm"}   # gold, silver, LongTerm-bond ETF
 STOCK_TICKERS     = {"aapl", "amzn", "goog"}
-INDEX_TICKERS     = {"sp500", "nq100", "DowJones"}
+INDEX_TICKERS     = {"sp500", "nq100", "dowjones"}
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── IRLS Surface Filter ──────────────────────────────────────────────────────

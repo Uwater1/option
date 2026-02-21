@@ -10,7 +10,7 @@ from scipy.stats import norm
 TICKERS = {
     "nq100": "QQQ",
     "sp500": "SPY",
-    "DowJones" : "DIA"
+    "dowjones" : "DIA",
     "russel2000": "IWM",
     "aapl": "AAPL",
     "msft": "MSFT",
@@ -25,8 +25,8 @@ TICKERS = {
     "eth": "ETHA",   # iShares Ethereum Trust ETF
     "gold": "GLD",   # SPDR Gold Shares ETF
     "silver": "SLV", # iShares Silver Trust ETF
-    "oilStock": "XLE",    # Oli stock
-    "LongTerm" : "TLT",
+    "oilstock": "XLE",    # Oil stock
+    "longterm" : "TLT",
 }
 
 # Mapping of tickers to their corresponding CBOE volatility indices

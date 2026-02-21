@@ -12,9 +12,28 @@ from numba import jit, vectorize, float64
 MODEL_FILE = "iv_surface_prod.json"
 DEFAULT_RATE = 0.0364
 
-COMMODITY_TICKERS = {"gold", "silver", "LongTerm"}
+COMMODITY_TICKERS = {"gold", "silver", "longterm"}
 STOCK_TICKERS     = {"aapl", "amzn", "goog"}
-INDEX_TICKERS     = {"sp500", "nq100", "DowJones"}
+INDEX_TICKERS     = {"sp500", "nq100", "dowjones"}
+
+def resolve_asset_class(token: str):
+    """Resolve a -t value to (is_stock, is_index, is_commodity) flags.
+
+    Accepts a category name (stock, index, commodity) or any known ticker.
+    """
+    t = token.strip().lower()
+    if t in ("", "none"):
+        return 0, 0, 0
+    # Direct category names
+    if t == "stock":     return 1, 0, 0
+    if t == "index":     return 0, 1, 0
+    if t == "commodity":  return 0, 0, 1
+    # Lookup by ticker
+    if t in STOCK_TICKERS:     return 1, 0, 0
+    if t in INDEX_TICKERS:     return 0, 1, 0
+    if t in COMMODITY_TICKERS: return 0, 0, 1
+    print(f"Warning: unknown ticker/class '{token}', defaulting all asset flags to 0")
+    return 0, 0, 0
 
 
 # --- NUMBA FUNCTIONS ---
@@ -133,7 +152,7 @@ def main():
     parser.add_argument("days", type=int, help="Days to expiration")
     parser.add_argument("vix", type=float, help="Volatility Index")
     parser.add_argument("rate", type=float, nargs='?', default=DEFAULT_RATE, help="Risk-free rate (default: 0.0364)")
-    parser.add_argument("--ticker", type=str, default="", help="Optional ticker to deduce asset class (e.g., aapl)")
+    parser.add_argument("-t", type=str, default="", help="Asset type or ticker (stock, index, commodity, aapl, gold ...)")
     
     args = parser.parse_args()
     
@@ -154,10 +173,7 @@ def main():
     print(f"{'Type':<6} {'Price':<10} {'IV':<8} {'Delta':<8} {'Gamma':<8} {'Vega':<8} {'Theta':<8}")
     print("-" * 65)
     
-    ticker = args.ticker.lower()
-    is_commodity = 1 if ticker in {t.lower() for t in COMMODITY_TICKERS} else 0
-    is_stock = 1 if ticker in {t.lower() for t in STOCK_TICKERS} else 0
-    is_index = 1 if ticker in {t.lower() for t in INDEX_TICKERS} else 0
+    is_stock, is_index, is_commodity = resolve_asset_class(args.t)
 
     for t in types:
         is_put = 1.0 if t == "put" else 0.0

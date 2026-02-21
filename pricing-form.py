@@ -10,6 +10,24 @@ from numba import jit, vectorize, float64
 MODEL_FILE = "iv_surface_prod.json"
 DEFAULT_RATE = 0.0364
 
+COMMODITY_TICKERS = {"gold", "silver", "longterm"}
+STOCK_TICKERS     = {"aapl", "amzn", "goog"}
+INDEX_TICKERS     = {"sp500", "nq100", "dowjones"}
+
+def resolve_asset_class(token: str):
+    """Resolve a -t value to (is_stock, is_index, is_commodity) flags."""
+    t = token.strip().lower()
+    if t in ("", "none"):
+        return 0, 0, 0
+    if t == "stock":     return 1, 0, 0
+    if t == "index":     return 0, 1, 0
+    if t == "commodity":  return 0, 0, 1
+    if t in STOCK_TICKERS:     return 1, 0, 0
+    if t in INDEX_TICKERS:     return 0, 1, 0
+    if t in COMMODITY_TICKERS: return 0, 0, 1
+    print(f"Warning: unknown ticker/class '{token}', defaulting all asset flags to 0")
+    return 0, 0, 0
+
 # --- NUMBA FUNCTIONS ---
 @jit(nopython=True)
 def norm_cdf(x):
@@ -45,7 +63,8 @@ def black_scholes_numba(S, K, T, r, sigma, is_put):
 def prepare_features(df):
     df = df.copy()
     
-    df['log_moneyness'] = np.log(df['strike'] / df['underlying'])
+    df['net_moneyness'] = df['strike'] / df['underlying']
+    df['log_moneyness'] = np.log(df['net_moneyness'])
     df['moneyness_sq'] = df['log_moneyness'] ** 2
     
     # Avoid negative sqrt
@@ -73,11 +92,12 @@ def prepare_features(df):
     df['atm_iv_proxy'] = df['vix'] / 100.0
     
     features = [
-        'log_moneyness', 'moneyness_sq', 'days', 'sqrt_dte', 'inv_dte', 
+        'net_moneyness', 'log_moneyness', 'moneyness_sq', 'days', 'sqrt_dte', 'inv_dte',
         'is_put', 'vix', 'vix_sq', 'vix_x_dte', 'vix_x_log_moneyness',
         'is_atm', 'is_otm', 'is_deep_otm', 'is_itm', 'is_deep_itm',
         'dte_under_15', 'dte_15_to_40', 'dte_over_40',
-        'atm_iv_proxy'
+        'atm_iv_proxy',
+        'is_stock', 'is_index', 'is_commodity'
     ]
     return df[features]
 
@@ -97,6 +117,7 @@ def main():
     parser.add_argument("days", type=int, help="Days to expiration")
     parser.add_argument("vix", type=float, help="Volatility Index")
     parser.add_argument("rate", type=float, nargs='?', default=DEFAULT_RATE, help="Risk-free rate (default: 0.0364)")
+    parser.add_argument("-t", type=str, default="", help="Asset type or ticker (stock, index, commodity, aapl, gold ...)")
     
     args = parser.parse_args()
     
@@ -135,6 +156,11 @@ def main():
     df_batch['underlying'] = args.underlying
     df_batch['days'] = args.days
     df_batch['vix'] = args.vix
+
+    is_stock, is_index, is_commodity = resolve_asset_class(args.t)
+    df_batch['is_stock'] = is_stock
+    df_batch['is_index'] = is_index
+    df_batch['is_commodity'] = is_commodity
     
     X_batch = prepare_features(df_batch)
     iv_log_preds = model.predict(X_batch)
