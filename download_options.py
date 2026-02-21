@@ -36,6 +36,8 @@ VOLATILITY_MAP = {
     "AMZN": "^VXAZN",
     "AAPL": "^VXAPL",
     "GOOG": "^VXGOG",
+    "TLT":"^VXTLT"
+    "SLV":"VXSLV"
 }
 
 
