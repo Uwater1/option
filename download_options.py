@@ -10,6 +10,7 @@ from scipy.stats import norm
 TICKERS = {
     "nq100": "QQQ",
     "sp500": "SPY",
+    "DowJones" : "DIA"
     "russel2000": "IWM",
     "aapl": "AAPL",
     "msft": "MSFT",
@@ -33,11 +34,12 @@ VOLATILITY_MAP = {
     "SPY": "^VIX",
     "QQQ": "^VXN",
     "GLD": "^GVZ",
+    "DIA": "^VXD",
     "AMZN": "^VXAZN",
     "AAPL": "^VXAPL",
     "GOOG": "^VXGOG",
-    "TLT":"^VXTLT"
-    "SLV":"VXSLV"
+    "TLT":"^VXTLT",
+    "SLV":"^VXSLV",
 }
 
 

@@ -12,6 +12,11 @@ from numba import jit, vectorize, float64
 MODEL_FILE = "iv_surface_prod.json"
 DEFAULT_RATE = 0.0364
 
+COMMODITY_TICKERS = {"gold", "silver", "LongTerm"}
+STOCK_TICKERS     = {"aapl", "amzn", "goog"}
+INDEX_TICKERS     = {"sp500", "nq100", "DowJones"}
+
+
 # --- NUMBA FUNCTIONS ---
 @jit(nopython=True)
 def norm_cdf(x):
@@ -79,7 +84,8 @@ def calculate_greeks_numba(S, K, T, r, sigma, is_put):
 def prepare_features(df):
     df = df.copy()
     
-    df['log_moneyness'] = np.log(df['strike'] / df['underlying'])
+    df['net_moneyness'] = df['strike'] / df['underlying']
+    df['log_moneyness'] = np.log(df['net_moneyness'])
     df['moneyness_sq'] = df['log_moneyness'] ** 2
     
     # Avoid negative sqrt
@@ -111,11 +117,12 @@ def prepare_features(df):
     df['atm_iv_proxy'] = df['vix'] / 100.0
     
     features = [
-        'log_moneyness', 'moneyness_sq', 'days', 'sqrt_dte', 'inv_dte', 
+        'net_moneyness', 'log_moneyness', 'moneyness_sq', 'days', 'sqrt_dte', 'inv_dte',
         'is_put', 'vix', 'vix_sq', 'vix_x_dte', 'vix_x_log_moneyness',
         'is_atm', 'is_otm', 'is_deep_otm', 'is_itm', 'is_deep_itm',
         'dte_under_15', 'dte_15_to_40', 'dte_over_40',
-        'atm_iv_proxy'
+        'atm_iv_proxy',
+        'is_stock', 'is_index', 'is_commodity'
     ]
     return df[features]
 
@@ -126,6 +133,7 @@ def main():
     parser.add_argument("days", type=int, help="Days to expiration")
     parser.add_argument("vix", type=float, help="Volatility Index")
     parser.add_argument("rate", type=float, nargs='?', default=DEFAULT_RATE, help="Risk-free rate (default: 0.0364)")
+    parser.add_argument("--ticker", type=str, default="", help="Optional ticker to deduce asset class (e.g., aapl)")
     
     args = parser.parse_args()
     
@@ -146,6 +154,11 @@ def main():
     print(f"{'Type':<6} {'Price':<10} {'IV':<8} {'Delta':<8} {'Gamma':<8} {'Vega':<8} {'Theta':<8}")
     print("-" * 65)
     
+    ticker = args.ticker.lower()
+    is_commodity = 1 if ticker in {t.lower() for t in COMMODITY_TICKERS} else 0
+    is_stock = 1 if ticker in {t.lower() for t in STOCK_TICKERS} else 0
+    is_index = 1 if ticker in {t.lower() for t in INDEX_TICKERS} else 0
+
     for t in types:
         is_put = 1.0 if t == "put" else 0.0
         
@@ -155,7 +168,10 @@ def main():
             'strike': [args.strike],
             'days': [args.days],
             'vix': [args.vix],
-            'is_put': [is_put]
+            'is_put': [is_put],
+            'is_commodity': [is_commodity],
+            'is_stock': [is_stock],
+            'is_index': [is_index]
         }
         df = pd.DataFrame(data)
         

@@ -14,6 +14,25 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 MODEL_FILE = "iv_surface_prod.json"
 
+# ── Asset-class lookup tables ────────────────────────────────────────────────
+# Keys are the lowercase ticker prefix used in CSV filenames; values are the
+# canonical Yahoo Finance / brokerage symbol (kept for reference).
+COMMODITY_TICKERS = {"gold", "silver", "LongTerm"}   # gold, silver, LongTerm-bond ETF
+STOCK_TICKERS     = {"aapl", "amzn", "goog"}
+INDEX_TICKERS     = {"sp500", "nq100", "DowJones"}
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── IRLS Surface Filter ──────────────────────────────────────────────────────
+IRLS_C                 = 1.345   # Huber tuning constant
+IRLS_BASE_THRESHOLD    = 3.5     # base max |std residual| (relaxed from 2.5)
+IRLS_MIN_ABS_DEV       = 3.0     # min IV points deviation to be an outlier
+IRLS_MIN_POINTS        = 10      # skip fit if snapshot has fewer points
+IRLS_MAX_ITER          = 50      # max IRLS iterations
+IRLS_L2_PENALTY        = 1e-4    # Ridge regularization for stability
+IV_MIN                 = 2.0     # tightened lower bound (was 1.0)
+IV_MAX                 = 150.0   # unchanged upper bound
+# ─────────────────────────────────────────────────────────────────────────────
+
 def enrich_data(df):
     """
     Calculate daysToExpiration and is_put if not present.
@@ -48,6 +67,96 @@ def enrich_data(df):
     
     return df
 
+
+def filter_arbitrage_irls(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Fit a robust parametric IV surface via IRLS per (ticker, trade_date) snapshot.
+
+    Surface model (7 terms):
+        IV ≈ β₀ + β₁·m + β₂·m² + β₃·t + β₄·t² + β₅·m·t + β₆·m²·t
+    where m = log(strike/underlying)  and  t = sqrt(DTE).
+
+    Points with |standardized Huber-MAD residual| > dyn_threshold AND
+    absolute residual > IRLS_MIN_ABS_DEV are removed as arbitrage-consistent outliers.
+    ATM options (|m| <= 0.02) are strictly preserved.
+    """
+    # ── Identify required columns ────────────────────────────────────────────
+    needed = {'strikePrice', 'underlyingPriceAtTrade', 'daysToExpiration',
+               'impliedVolatility'}
+    if not needed.issubset(df.columns):
+        return df
+
+    work = df.copy()
+    for c in needed:
+        work[c] = pd.to_numeric(work[c], errors='coerce')
+    work = work.dropna(subset=list(needed))
+    work = work[work['daysToExpiration'] > 0]
+    work = work[work['underlyingPriceAtTrade'] > 0]
+
+    if len(work) < IRLS_MIN_POINTS:
+        return df  # too few points to fit 7 parameters reliably
+
+    # ── Build design matrix ──────────────────────────────────────────────────
+    m = np.log(work['strikePrice'] / work['underlyingPriceAtTrade']).values
+    t = np.sqrt(work['daysToExpiration']).values
+    y = work['impliedVolatility'].values
+
+    X = np.column_stack([
+        np.ones(len(m)),   # β₀ intercept
+        m,                  # β₁ skew
+        m ** 2,             # β₂ smile
+        t,                  # β₃ term level
+        t ** 2,             # β₄ term curvature
+        m * t,              # β₅ skew × term
+        m ** 2 * t,         # β₆ smile × term
+    ])
+
+    # ── IRLS with Huber weights ──────────────────────────────────────────────
+    w = np.exp(-2.0 * np.abs(m))  # initial weights inversely prop to moneyness dist
+    beta = np.zeros(X.shape[1])
+    
+    I_reg = np.eye(X.shape[1])
+    I_reg[0, 0] = 0  # Do not regularize intercept
+
+    for _ in range(IRLS_MAX_ITER):
+        W = np.diag(w)
+        XtW = X.T @ W
+        try:
+            beta_new = np.linalg.solve(XtW @ X + IRLS_L2_PENALTY * I_reg, XtW @ y)
+        except np.linalg.LinAlgError:
+            return df  # singular matrix — skip filter
+
+        if np.max(np.abs(beta_new - beta)) < 1e-6:
+            beta = beta_new
+            break
+        beta = beta_new
+
+        residuals = y - X @ beta
+        mad = np.median(np.abs(residuals))
+        mad_scale = 1.4826 * mad if mad > 1e-10 else 1.0  # robust sigma
+        r = residuals / mad_scale
+
+        # Huber weights: w = min(1, IRLS_C / |r|)
+        abs_r = np.abs(r)
+        w = np.where(abs_r < IRLS_C, 1.0, IRLS_C / np.maximum(abs_r, 1e-10))
+
+    # ── Final standardized residuals for outlier detection ───────────────────
+    final_residuals = y - X @ beta
+    mad = np.median(np.abs(final_residuals))
+    mad_scale = 1.4826 * mad if mad > 1e-10 else 1.0
+    std_residuals = np.abs(final_residuals) / mad_scale
+
+    # ── Map results back to original df index ────────────────────────────────
+    # Dynamic threshold: relax for deep OTM/ITM and ultra-short DTE
+    dyn_threshold = IRLS_BASE_THRESHOLD + 1.5 * np.abs(m) + 0.1 / np.maximum(t, 0.05)
+    
+    keep_mask = (std_residuals <= dyn_threshold) | (np.abs(final_residuals) <= IRLS_MIN_ABS_DEV)
+    keep_mask = keep_mask | (np.abs(m) <= 0.02)  # Strictly save ATM options (+-2%)
+    
+    keep_idx = work.index[keep_mask]
+    return df.loc[df.index.isin(keep_idx)]
+
+
 def prepare_features(df):
     df = df.copy()
     
@@ -65,7 +174,8 @@ def prepare_features(df):
     df = df.dropna(subset=cols)
     df = df[df['days'] >= 0.9]
     
-    df['log_moneyness'] = np.log(df['strike'] / df['underlying'])
+    df['net_moneyness'] = df['strike'] / df['underlying']
+    df['log_moneyness'] = np.log(df['net_moneyness'])
     df['moneyness_sq'] = df['log_moneyness'] ** 2
     
     df['sqrt_dte'] = np.sqrt(np.maximum(df['days'], 0.001))
@@ -98,14 +208,26 @@ def prepare_features(df):
     df['atm_iv_proxy'] = df['vix'] / 100.0
     
     features = [
-        'log_moneyness', 'moneyness_sq', 'days', 'sqrt_dte', 'inv_dte', 
+        'net_moneyness', 'log_moneyness', 'moneyness_sq', 'days', 'sqrt_dte', 'inv_dte',
         'is_put', 'vix', 'vix_sq', 'vix_x_dte', 'vix_x_log_moneyness',
         'is_atm', 'is_otm', 'is_deep_otm', 'is_itm', 'is_deep_itm',
         'dte_under_15', 'dte_15_to_40', 'dte_over_40',
-        'atm_iv_proxy'
+        'atm_iv_proxy',
+        # Asset-class flags
+        'is_stock', 'is_index', 'is_commodity',
     ]
     
     return df, features
+
+def _ticker_from_filename(filepath: str) -> str:
+    """Extract the lowercase ticker prefix from a CSV filename.
+
+    Expected naming convention: <ticker>_<YYYYMMDD>_<calls|puts>_*.csv
+    e.g.  aapl_20260320_calls_263_88.csv  →  'aapl'
+    """
+    basename = os.path.basename(filepath)
+    return basename.split('_')[0].lower()
+
 
 def process_file(f):
     try:
@@ -114,28 +236,39 @@ def process_file(f):
             header = file.readline()
         if 'volatilityIndex' not in header:
             return None
-            
+
         df = pd.read_csv(f)
         df = enrich_data(df)
-        
+
+        # ── Asset-class features derived from filename ticker ────────────────
+        ticker = _ticker_from_filename(f)
+        df['is_commodity'] = int(ticker in COMMODITY_TICKERS)
+        df['is_stock']     = int(ticker in STOCK_TICKERS)
+        df['is_index']     = int(ticker in INDEX_TICKERS)
+        # ────────────────────────────────────────────────────────────────────
+
         # Basic filtering
         if 'lastPrice' in df.columns:
-             df = df[df['lastPrice'] > 0.01]
+            df = df[df['lastPrice'] > 0.01]
         if 'volume' in df.columns:
-             df = df[df['volume'] >= 10]
+            df = df[df['volume'] >= 10]
 
         # Filter extreme IVs and near-expiration options
         if 'impliedVolatility' in df.columns:
-            df = df[(df['impliedVolatility'] > 1.0) & (df['impliedVolatility'] < 150.0)]
+            df = df[(df['impliedVolatility'] > IV_MIN) & (df['impliedVolatility'] < IV_MAX)]
         if 'daysToExpiration' in df.columns:
             df = df[df['daysToExpiration'] >= 0.9]
 
-        required = ['strikePrice', 'underlyingPriceAtTrade', 'daysToExpiration', 'volatilityIndex', 'is_put', 'impliedVolatility']
+        # Robust surface filter: remove arbitrage-consistent outliers via IRLS
+        df = filter_arbitrage_irls(df)
+
+        required = ['strikePrice', 'underlyingPriceAtTrade', 'daysToExpiration',
+                    'volatilityIndex', 'is_put', 'impliedVolatility']
         if not all(col in df.columns for col in required):
             return None
-            
+
         df = df.dropna(subset=required)
-        
+
         if len(df) > 0:
             return df
     except:
@@ -217,11 +350,15 @@ def main():
     print("\n--- Training Phase ---")
     model = xgb.XGBRegressor(
         objective='reg:squarederror',
-        n_estimators=1000,
+        n_estimators=2000,
         max_depth=8,
         learning_rate=0.05,
+        min_child_weight=3,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        reg_lambda=1.5,
         early_stopping_rounds=50,
-        eval_metric='rmse'
+        eval_metric='rmse',
     )
     model.fit(
         X_train, y_train,
