@@ -3,8 +3,6 @@ import os
 import pandas as pd
 import numpy as np
 import xgboost as xgb
-from datetime import datetime
-import glob
 import math
 from numba import jit, vectorize, float64
 
@@ -43,38 +41,6 @@ def black_scholes_numba(S, K, T, r, sigma, is_put):
         
     return price
 
-@jit(nopython=True)
-def calculate_greeks_numba(S, K, T, r, sigma, is_put):
-    if T <= 1e-6 or sigma <= 0 or S <= 0 or K <= 0:
-        return 0.0, 0.0, 0.0, 0.0, 0.0
-
-    sqrt_T = math.sqrt(T)
-    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrt_T)
-    d2 = d1 - sigma * sqrt_T
-    
-    nd1 = norm_pdf(d1)
-    
-    delta = 0.0
-    rho = 0.0
-    theta = 0.0
-    
-    if is_put == 0.0:
-        delta = norm_cdf(d1)
-        rho = K * T * math.exp(-r * T) * norm_cdf(d2)
-        theta = (-S * nd1 * sigma / (2 * sqrt_T) 
-                 - r * K * math.exp(-r * T) * norm_cdf(d2))
-    else:
-        delta = -norm_cdf(-d1)
-        rho = -K * T * math.exp(-r * T) * norm_cdf(-d2)
-        theta = (-S * nd1 * sigma / (2 * sqrt_T) 
-                 + r * K * math.exp(-r * T) * norm_cdf(-d2))
-
-    gamma = nd1 / (S * sigma * sqrt_T)
-    vega = S * sqrt_T * nd1 / 100.0
-    theta = theta / 365.0 
-
-    return delta, gamma, vega, theta, rho
-
 # --- FEATURE PREP ---
 def prepare_features(df):
     df = df.copy()
@@ -91,10 +57,8 @@ def prepare_features(df):
     df['vix_x_log_moneyness'] = df['vix'] * df['log_moneyness']
     
     # Bucketed Moneyness
-    # Normalized OTM amount: Positive = OTM, Negative = ITM
     df['otm_amount'] = df['log_moneyness'] * (1 - 2 * df['is_put'])
     
-    # 5-Bucket Moneyness
     threshold = df['vix'] * 0.02 + df['sqrt_dte'] * 0.5
     df['is_atm'] = (np.abs(df['otm_amount']) <= 0.02).astype(int)
     df['is_otm'] = ((df['otm_amount'] > 0.02) & (df['otm_amount'] <= threshold)).astype(int)
@@ -102,12 +66,10 @@ def prepare_features(df):
     df['is_itm'] = ((df['otm_amount'] < -0.02) & (df['otm_amount'] >= -threshold)).astype(int)
     df['is_deep_itm'] = (df['otm_amount'] < -threshold).astype(int)
     
-    # Bucketed DTE
     df['dte_under_15'] = (df['days'] < 15).astype(int)
     df['dte_15_to_40'] = ((df['days'] >= 15) & (df['days'] <= 40)).astype(int)
     df['dte_over_40'] = (df['days'] > 40).astype(int)
     
-    # atm_iv_proxy from vix
     df['atm_iv_proxy'] = df['vix'] / 100.0
     
     features = [
@@ -119,10 +81,19 @@ def prepare_features(df):
     ]
     return df[features]
 
+def get_strike_step(underlying):
+    if underlying <= 20:
+        return 0.5
+    elif underlying <= 100:
+        return 1.0
+    elif underlying <= 500:
+        return 5.0
+    else:
+        return 10.0
+
 def main():
-    parser = argparse.ArgumentParser(description="Price option.")
+    parser = argparse.ArgumentParser(description="Price option chain form.")
     parser.add_argument("underlying", type=float, help="Underlying price")
-    parser.add_argument("strike", type=float, help="Strike price")
     parser.add_argument("days", type=int, help="Days to expiration")
     parser.add_argument("vix", type=float, help="Volatility Index")
     parser.add_argument("rate", type=float, nargs='?', default=DEFAULT_RATE, help="Risk-free rate (default: 0.0364)")
@@ -138,41 +109,60 @@ def main():
     model = xgb.XGBRegressor()
     model.load_model(MODEL_FILE)
     
-    # Pricing both Call and Put
-    types = ["call", "put"]
+    step = get_strike_step(args.underlying)
+    center_strike = round(args.underlying / step) * step
     
-    print(f"\nUnderlying: {args.underlying} | Strike: {args.strike} | Days: {args.days} | VIX: {args.vix} | Rate: {args.rate}")
-    print("-" * 65)
-    print(f"{'Type':<6} {'Price':<10} {'IV':<8} {'Delta':<8} {'Gamma':<8} {'Vega':<8} {'Theta':<8}")
-    print("-" * 65)
+    # 10 strikes below and 10 above
+    strikes = [center_strike + i * step for i in range(-10, 11)]
     
-    for t in types:
-        is_put = 1.0 if t == "put" else 0.0
+    # Find the 2 strikes closest to underlying
+    sorted_by_dist = sorted(strikes, key=lambda x: abs(x - args.underlying))
+    closest_two = sorted_by_dist[:2]
+    
+    print(f"\nUnderlying: {args.underlying} | Days: {args.days} | VIX: {args.vix} | Rate: {args.rate}")
+    print("-" * 55)
+    print(f"{'CALLS (Price) | IV%':>22} | {'STRIKE':^7} | {'PUTS (Price) | IV%':<22}")
+    print("-" * 55)
+    
+    # Pre-build dataframes for batch prediction
+    # This is much faster than running xgboost predict in a loop 40 times
+    rows = []
+    for K in strikes:
+        rows.append({'strike': K, 'is_put': 0.0})
+        rows.append({'strike': K, 'is_put': 1.0})
         
-        # Prepare single row data
-        data = {
-            'underlying': [args.underlying],
-            'strike': [args.strike],
-            'days': [args.days],
-            'vix': [args.vix],
-            'is_put': [is_put]
-        }
-        df = pd.DataFrame(data)
+    df_batch = pd.DataFrame(rows)
+    df_batch['underlying'] = args.underlying
+    df_batch['days'] = args.days
+    df_batch['vix'] = args.vix
+    
+    X_batch = prepare_features(df_batch)
+    iv_log_preds = model.predict(X_batch)
+    iv_preds = np.exp(iv_log_preds)
+    
+    T = args.days / 365.0
+    
+    for i, K in enumerate(strikes):
+        is_closest = K in closest_two
+        marker = "*" if is_closest else " "
         
-        X = prepare_features(df)
-        predicted_iv_log = model.predict(X)[0]
-        predicted_iv = np.exp(predicted_iv_log)
+        iv_call = iv_preds[i * 2]
+        iv_put = iv_preds[i * 2 + 1]
         
-        sigma = predicted_iv / 100.0
-        T = args.days / 365.0
+        sigma_c = iv_call / 100.0
+        sigma_p = iv_put / 100.0
         
-        # Numba calculation
-        price = black_scholes_numba(args.underlying, args.strike, T, args.rate, sigma, is_put)
-        delta, gamma, vega, theta, rho = calculate_greeks_numba(
-            args.underlying, args.strike, T, args.rate, sigma, is_put
-        )
+        price_c = black_scholes_numba(args.underlying, K, T, args.rate, sigma_c, 0.0)
+        price_p = black_scholes_numba(args.underlying, K, T, args.rate, sigma_p, 1.0)
         
-        print(f"{t.upper():<6} ${price:<9.2f} {predicted_iv:<7.2f}% {delta:<8.4f} {gamma:<8.4f} {vega:<8.4f} {theta:<8.4f}")
+        # Format string
+        c_str = f"${price_c:.2f} | {iv_call:.1f}%"
+        p_str = f"${price_p:.2f} | {iv_put:.1f}%"
+        
+        strike_fmt = f"{K:g}" # remove trailing zeros 
+        strike_str = f"{strike_fmt}{marker}"
+        
+        print(f"{c_str:>22} | {strike_str:^7} | {p_str:<22}")
 
 if __name__ == "__main__":
     main()

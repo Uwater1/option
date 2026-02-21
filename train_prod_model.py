@@ -5,6 +5,7 @@ import numpy as np
 import xgboost as xgb
 import glob
 import re
+import multiprocessing as mp
 from datetime import datetime
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
@@ -81,11 +82,12 @@ def prepare_features(df):
     df['otm_amount'] = df['log_moneyness'] * (1 - 2 * df['is_put'])
     
     # 5-Bucket Moneyness
+    threshold = df['vix'] * 0.005 + df['sqrt_dte'] * 0.001
     df['is_atm'] = (np.abs(df['otm_amount']) <= 0.02).astype(int)
-    df['is_otm'] = ((df['otm_amount'] > 0.02) & (df['otm_amount'] <= 0.1)).astype(int)
-    df['is_deep_otm'] = (df['otm_amount'] > 0.1).astype(int)
-    df['is_itm'] = ((df['otm_amount'] < -0.02) & (df['otm_amount'] >= -0.1)).astype(int)
-    df['is_deep_itm'] = (df['otm_amount'] < -0.1).astype(int)
+    df['is_otm'] = ((df['otm_amount'] > 0.02) & (df['otm_amount'] <= threshold)).astype(int)
+    df['is_deep_otm'] = (df['otm_amount'] > threshold).astype(int)
+    df['is_itm'] = ((df['otm_amount'] < -0.02) & (df['otm_amount'] >= -threshold)).astype(int)
+    df['is_deep_itm'] = (df['otm_amount'] < -threshold).astype(int)
     
     # Bucketed DTE
     df['dte_under_15'] = (df['days'] < 15).astype(int)
@@ -105,49 +107,62 @@ def prepare_features(df):
     
     return df, features
 
+def process_file(f):
+    try:
+        # Quick check for required columns in header before full parse
+        with open(f, 'r') as file:
+            header = file.readline()
+        if 'volatilityIndex' not in header:
+            return None
+            
+        df = pd.read_csv(f)
+        df = enrich_data(df)
+        
+        # Basic filtering
+        if 'lastPrice' in df.columns:
+             df = df[df['lastPrice'] > 0.01]
+        if 'volume' in df.columns:
+             df = df[df['volume'] >= 10]
+
+        # Filter extreme IVs and near-expiration options
+        if 'impliedVolatility' in df.columns:
+            df = df[(df['impliedVolatility'] > 1.0) & (df['impliedVolatility'] < 150.0)]
+        if 'daysToExpiration' in df.columns:
+            df = df[df['daysToExpiration'] >= 0.9]
+
+        required = ['strikePrice', 'underlyingPriceAtTrade', 'daysToExpiration', 'volatilityIndex', 'is_put', 'impliedVolatility']
+        if not all(col in df.columns for col in required):
+            return None
+            
+        df = df.dropna(subset=required)
+        
+        if len(df) > 0:
+            return df
+    except:
+        pass
+    return None
+
 def load_data_from_range(data_dir, date_range):
     """
     Load data from directories matching the date range.
     date_range: list of strings 'YYYY-MM-DD'
     """
-    all_data = []
-    
+    all_files = []
     for date_str in date_range:
         path = os.path.join(data_dir, date_str)
         if not os.path.exists(path):
             print(f"Warning: Directory {path} does not exist.")
             continue
-            
-        print(f"Loading data from {date_str}...")
         files = glob.glob(os.path.join(path, "*.csv"))
+        all_files.extend(files)
         
-        for f in files:
-            try:
-                df = pd.read_csv(f)
-                df = enrich_data(df)
-                
-                # Basic filtering
-                if 'lastPrice' in df.columns:
-                     df = df[df['lastPrice'] > 0.01]
-                if 'volume' in df.columns:
-                     df = df[df['volume'] >= 10]
-
-                # Filter extreme IVs and near-expiration options
-                if 'impliedVolatility' in df.columns:
-                    df = df[(df['impliedVolatility'] > 1.0) & (df['impliedVolatility'] < 150.0)]
-                if 'daysToExpiration' in df.columns:
-                    df = df[df['daysToExpiration'] >= 0.9]
-
-                required = ['strikePrice', 'underlyingPriceAtTrade', 'daysToExpiration', 'volatilityIndex', 'is_put', 'impliedVolatility']
-                if not all(col in df.columns for col in required):
-                    continue
-                    
-                df = df.dropna(subset=required)
-                
-                if len(df) > 0:
-                    all_data.append(df)
-            except:
-                continue
+    print(f"Found {len(all_files)} files to process. Starting parallel load...")
+    
+    all_data = []
+    with mp.Pool(mp.cpu_count()) as pool:
+        for df in pool.imap_unordered(process_file, all_files, chunksize=100):
+            if df is not None:
+                all_data.append(df)
                 
     if all_data:
         return pd.concat(all_data, ignore_index=True)
