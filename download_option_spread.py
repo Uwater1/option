@@ -60,8 +60,7 @@ def main():
     if not os.path.exists(spread_folder):
         os.makedirs(spread_folder)
         
-    current_date = datetime.now().strftime("%Y%m%d")
-    current_hour = datetime.now().strftime("%H")
+    current_date = datetime.now().strftime("%Y%m%d%h")
     
     # We will track when we started to enforce a time limit
     start_time = time.time()
@@ -160,7 +159,7 @@ def main():
 
             if all_spreads_for_ticker:
                 final_ticker_df = pd.concat(all_spreads_for_ticker, ignore_index=True)
-                file_path = os.path.join(spread_folder, f"spread_{ticker_symbol}_{current_date}_{current_hour}.csv")
+                file_path = os.path.join(spread_folder, f"spread_{ticker_symbol}_{current_date}.csv")
                 final_ticker_df.to_csv(file_path, index=False)
                 print(f"Successfully saved {ticker_symbol} spread data to {file_path}")
             
