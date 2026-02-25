@@ -1,0 +1,167 @@
+import yfinance as yf
+import os
+import sys
+import pandas as pd
+import numpy as np
+import time
+from datetime import datetime
+
+TICKERS = {
+    "spy": "SPY",
+    "nq100": "QQQ",
+    "aapl": "AAPL",
+    "amzn": "AMZN",
+    "goog": "GOOG"
+}
+
+VOLATILITY_MAP = {
+    "SPY": "^VIX",
+    "QQQ": "^VXN",
+    "AMZN": "^VXAZN",
+    "AAPL": "^VXAPL",
+    "GOOG": "^VXGOG"
+}
+
+_intraday_cache = {}
+
+def get_intraday_data(ticker_symbol):
+    if ticker_symbol in _intraday_cache:
+        return _intraday_cache[ticker_symbol]
+    
+    tk = yf.Ticker(ticker_symbol)
+    hist = tk.history(period="5d", interval="1m")
+    if not hist.empty:
+        hist.index = pd.to_datetime(hist.index, utc=True)
+    _intraday_cache[ticker_symbol] = hist
+    return hist
+
+def get_price_at_time(ticker_symbol, target_datetime, fallback_price):
+    if pd.isna(target_datetime):
+        return fallback_price
+    
+    try:
+        hist = get_intraday_data(ticker_symbol)
+        if hist.empty:
+            return fallback_price
+            
+        if target_datetime.tzinfo is None:
+            target_datetime = target_datetime.replace(tzinfo=pd.Timestamp.now(tz='UTC').tzinfo)
+            
+        closest_idx = hist.index.get_indexer([target_datetime], method='nearest')[0]
+        if closest_idx >= 0:
+            return float(hist['Close'].iloc[closest_idx])
+    except Exception:
+        pass
+    
+    return fallback_price
+
+def main():
+    spread_folder = "spread"
+    if not os.path.exists(spread_folder):
+        os.makedirs(spread_folder)
+        
+    current_date = datetime.now().strftime("%Y%m%d")
+    current_hour = datetime.now().strftime("%H")
+    
+    # We will track when we started to enforce a time limit
+    start_time = time.time()
+    MAX_DURATION_SECONDS = 9 * 60 # 9 minutes max allowed
+    
+    for name, ticker_symbol in TICKERS.items():
+        if time.time() - start_time > MAX_DURATION_SECONDS:
+            print("Nearing 10 minute timeout. Stopping further downloads.")
+            break
+            
+        try:
+            print(f"Downloading spread data for {name} ({ticker_symbol})...")
+            tk = yf.Ticker(ticker_symbol)
+            
+            # Get current price
+            hist = tk.history(period="1d")
+            current_price = hist['Close'].iloc[-1] if not hist.empty else tk.info.get('regularMarketPrice', np.nan)
+                
+            dates = tk.options
+            if not dates:
+                print(f"No options found for {name}.")
+                continue
+                
+            all_spreads_for_ticker = []
+            
+            # Loop through all expirations
+            for date in dates:
+                if time.time() - start_time > MAX_DURATION_SECONDS:
+                    print(f"Timeout reached while processing {ticker_symbol} expirations.")
+                    break
+                    
+                try:
+                    chain = tk.option_chain(date)
+                    calls = chain.calls
+                    puts = chain.puts
+                    
+                    dfs_to_concat = []
+                    if not calls.empty:
+                        calls['optionType'] = 'c'
+                        dfs_to_concat.append(calls)
+                    if not puts.empty:
+                        puts['optionType'] = 'p'
+                        dfs_to_concat.append(puts)
+                        
+                    if not dfs_to_concat:
+                        continue
+                        
+                    df = pd.concat(dfs_to_concat, ignore_index=True)
+                    
+                    if 'ask' in df.columns and 'bid' in df.columns:
+                        df['bid_ask_spread'] = df['ask'] - df['bid']
+                    else:
+                        df['bid_ask_spread'] = np.nan
+                        
+                    if 'lastTradeDate' in df.columns:
+                        df['underlyingPriceAtTrade'] = df['lastTradeDate'].apply(
+                            lambda x: get_price_at_time(ticker_symbol, x, current_price)
+                        )
+                    else:
+                        df['underlyingPriceAtTrade'] = current_price
+                        
+                    vol_symbol = VOLATILITY_MAP.get(ticker_symbol)
+                    if vol_symbol and 'lastTradeDate' in df.columns:
+                        v_tk = yf.Ticker(vol_symbol)
+                        v_hist = v_tk.history(period="1d")
+                        vol_current_price = v_hist['Close'].iloc[-1] if not v_hist.empty else np.nan
+                        df['volatilityIndex'] = df['lastTradeDate'].apply(
+                            lambda x: get_price_at_time(vol_symbol, x, vol_current_price)
+                        )
+                    else:
+                        df['volatilityIndex'] = np.nan
+                    
+                    required_cols = [
+                        'contractSymbol', 'lastTradeDate', 'strike', 'lastPrice', 'volume',
+                        'underlyingPriceAtTrade', 'volatilityIndex', 'bid_ask_spread', 'optionType'
+                    ]
+                    
+                    # Round numerical columns to 3 decimal places
+                    float_cols = ['strike', 'lastPrice', 'underlyingPriceAtTrade', 'volatilityIndex', 'bid_ask_spread']
+                    for col in float_cols:
+                        if col in df.columns:
+                            df[col] = df[col].round(3)
+                            
+                    available_cols = [c for c in required_cols if c in df.columns]
+                    df = df[available_cols]
+                    
+                    all_spreads_for_ticker.append(df)
+                    time.sleep(0.1) # Small delay to avoid rate limiting
+                    
+                except Exception as e:
+                    print(f"  Error fetching {date} for {name}: {e}")
+
+            if all_spreads_for_ticker:
+                final_ticker_df = pd.concat(all_spreads_for_ticker, ignore_index=True)
+                file_path = os.path.join(spread_folder, f"spread_{ticker_symbol}_{current_date}_{current_hour}.csv")
+                final_ticker_df.to_csv(file_path, index=False)
+                print(f"Successfully saved {ticker_symbol} spread data to {file_path}")
+            
+        except Exception as e:
+            print(f"Error downloading spread data for {name}: {e}")
+
+if __name__ == "__main__":
+    main()
