@@ -7,6 +7,7 @@ import glob
 import re
 import multiprocessing as mp
 from datetime import datetime
+import pytz
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 
 # Reuse functions from pricing.py / price_options.py logic
@@ -60,10 +61,25 @@ def enrich_data(df):
             
             # Parse trade date for DTE calculation
             if 'lastTradeDate' in df.columns:
-                df['trade_date_dt'] = pd.to_datetime(df['lastTradeDate'], utc=True).dt.tz_convert(None)
-                
-                # Calculate days to expiry
-                df['daysToExpiration'] = (df['expiry_dt'] - df['trade_date_dt']).dt.days
+                trade_date_utc = pd.to_datetime(df['lastTradeDate'], utc=True)
+
+                # Options expire at 16:00 New York Time — localize correctly to handle DST
+                _ny_tz = pytz.timezone('America/New_York')
+
+                def _localize_expiry(naive_dt):
+                    if pd.isna(naive_dt):
+                        return pd.NaT
+                    dt = naive_dt.replace(hour=16, minute=0, second=0, microsecond=0)
+                    return pd.Timestamp(
+                        _ny_tz.localize(dt.to_pydatetime()).astimezone(pytz.utc)
+                    )
+
+                expiry_utc = df['expiry_dt'].apply(_localize_expiry)
+
+                # Use fractional days (via total_seconds) to preserve intra-day precision
+                df['daysToExpiration'] = (
+                    (expiry_utc - trade_date_utc).dt.total_seconds() / 86400.0
+                )
     
     return df
 

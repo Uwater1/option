@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import time
 from datetime import datetime
+import pytz
 
 TICKERS = {
     "spy": "SPY",
@@ -60,7 +61,9 @@ def main():
     if not os.path.exists(spread_folder):
         os.makedirs(spread_folder)
         
-    current_date = datetime.now().strftime("%Y%m%d%h")
+    ny_tz = pytz.timezone('America/New_York')
+    now_ny = datetime.now(ny_tz)
+    current_date = now_ny.strftime("%Y%m%d_%H")
     
     # We will track when we started to enforce a time limit
     start_time = time.time()
@@ -119,8 +122,12 @@ def main():
                         df['underlyingPriceAtTrade'] = df['lastTradeDate'].apply(
                             lambda x: get_price_at_time(ticker_symbol, x, current_price)
                         )
-                        # Calculate days_to_expire
-                        exp_dt = pd.to_datetime(date).tz_localize('UTC')
+                        # Calculate days_to_expire (options expire at 16:00 New York Time)
+                        # Use localize first, then replace hour to correctly handle DST
+                        exp_date_naive = pd.to_datetime(date).replace(hour=16, minute=0, second=0, microsecond=0)
+                        ny_tz_exp = pytz.timezone('America/New_York')
+                        exp_dt = ny_tz_exp.localize(exp_date_naive.to_pydatetime()).astimezone(pytz.utc)
+                        exp_dt = pd.Timestamp(exp_dt)
                         df['days_to_expire'] = (exp_dt - pd.to_datetime(df['lastTradeDate'], utc=True)).dt.total_seconds() / (24 * 3600)
                     else:
                         df['underlyingPriceAtTrade'] = current_price

@@ -1,9 +1,11 @@
-name: Download Spread 14:00 EDT
+name: Download Spread 14:00 NY
 
 on:
   schedule:
-    # 14:00 EDT is 18:00 UTC
+    # Run at 18:00 UTC and 19:00 UTC to cover both EDT (UTC-4) and EST (UTC-5)
+    # The job itself will exit early if the New York time is not 14:xx
     - cron: '0 18 * * 1-5'
+    - cron: '0 19 * * 1-5'
   workflow_dispatch:
 
 permissions:
@@ -15,22 +17,37 @@ jobs:
     runs-on: ubuntu-slim
     
     steps:
+      - name: Check New York time window
+        id: time_check
+        run: |
+          NY_HOUR=$(TZ=America/New_York date +'%H')
+          echo "Current New York hour: $NY_HOUR"
+          if [ "$NY_HOUR" != "14" ]; then
+            echo "Not 14:xx NY time (got hour=$NY_HOUR). Skipping this trigger."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Checkout repository
+        if: steps.time_check.outputs.skip == 'false'
         uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install dependencies
-        run: pip install pandas yfinance numpy
+        if: steps.time_check.outputs.skip == 'false'
+        run: pip install pandas yfinance numpy pytz
 
       - name: Run spread download script
+        if: steps.time_check.outputs.skip == 'false'
         id: download
         run: |
           python download_option_spread.py > /tmp/work_log.txt 2>&1
           cat /tmp/work_log.txt
           
-          # Organize into date_hour folder
-          DIR="spread/$(date +'%Y%m%d_%H')"
+          # Organize into date_hour folder using New York Time
+          DIR="spread/$(TZ=America/New_York date +'%Y%m%d_%H')"
           mkdir -p "$DIR"
           mv spread/*.csv "$DIR/" 2>/dev/null || true
           
@@ -39,17 +56,19 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Write work summary
+        if: steps.time_check.outputs.skip == 'false'
         run: |
-          echo "## Spread Download Summary (14:00 EDT)" >> $GITHUB_STEP_SUMMARY
-          echo "Run completed on $(date +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "## Spread Download Summary (14:00 NY)" >> $GITHUB_STEP_SUMMARY
+          echo "Run completed on $(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S %Z')" >> $GITHUB_STEP_SUMMARY
           echo "### Execution Log" >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.download.outputs.log }}" >> $GITHUB_STEP_SUMMARY
 
       - name: Commit and push spread data
+        if: steps.time_check.outputs.skip == 'false'
         run: |
           git config --global user.email "action@github.com"
           git config --global user.name "GitHub Action"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git add spread/
-          git diff --staged --quiet || git commit -m "Add spread data for 14:00 EDT"
+          git diff --staged --quiet || git commit -m "Add spread data for 14:00 NY ($(TZ=America/New_York date +'%Y-%m-%d %Z'))"
           git push
