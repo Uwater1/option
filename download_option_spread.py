@@ -120,8 +120,12 @@ def main():
                         df['underlyingPriceAtTrade'] = df['lastTradeDate'].apply(
                             lambda x: get_price_at_time(ticker_symbol, x, current_price)
                         )
+                        # Calculate days_to_expire
+                        exp_dt = pd.to_datetime(date).tz_localize('UTC')
+                        df['days_to_expire'] = (exp_dt - pd.to_datetime(df['lastTradeDate'], utc=True)).dt.total_seconds() / (24 * 3600)
                     else:
                         df['underlyingPriceAtTrade'] = current_price
+                        df['days_to_expire'] = np.nan
                         
                     vol_symbol = VOLATILITY_MAP.get(ticker_symbol)
                     if vol_symbol and 'lastTradeDate' in df.columns:
@@ -135,12 +139,12 @@ def main():
                         df['volatilityIndex'] = np.nan
                     
                     required_cols = [
-                        'contractSymbol', 'lastTradeDate', 'strike', 'lastPrice', 'volume',
-                        'underlyingPriceAtTrade', 'volatilityIndex', 'bid_ask_spread', 'optionType'
+                        'contractSymbol', 'lastTradeDate', 'strike', 'lastPrice', 'volume', 'openInterest',
+                        'underlyingPriceAtTrade', 'volatilityIndex', 'bid_ask_spread', 'days_to_expire', 'optionType'
                     ]
                     
                     # Round numerical columns to 3 decimal places
-                    float_cols = ['strike', 'lastPrice', 'underlyingPriceAtTrade', 'volatilityIndex', 'bid_ask_spread']
+                    float_cols = ['strike', 'lastPrice', 'underlyingPriceAtTrade', 'volatilityIndex', 'bid_ask_spread', 'days_to_expire', 'openInterest']
                     for col in float_cols:
                         if col in df.columns:
                             df[col] = df[col].round(3)
