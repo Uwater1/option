@@ -210,8 +210,8 @@ def prepare_features(df):
     # 5-Bucket Moneyness
     threshold = df['vix'] * 0.004 + df['sqrt_dte'] * 0.001
     df['is_atm'] = (np.abs(df['otm_amount']) <= 0.02).astype(int)
-    df['is_otm'] = ((df['otm_amount'] > 0.02) & (df['otm_amount'] < threshold)).astype(int)
-    df['is_deep_otm'] = (df['otm_amount'] >= threshold).astype(int)
+    df['is_otm'] = ((df['otm_amount'] > 0.02) & (df['otm_amount'] <= threshold)).astype(int)
+    df['is_deep_otm'] = (df['otm_amount'] > threshold).astype(int)
     df['is_itm'] = ((df['otm_amount'] < -0.02) & (df['otm_amount'] > -threshold)).astype(int)
     df['is_deep_itm'] = (df['otm_amount'] <= -threshold).astype(int)
     
