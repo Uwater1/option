@@ -188,7 +188,7 @@ def prepare_features(df):
     for c in cols:
         df[c] = pd.to_numeric(df[c], errors='coerce')
     df = df.dropna(subset=cols)
-    df = df[df['days'] >= 0.9]
+    df = df[df['days'] >= 1.1]
     
     df['net_moneyness'] = df['strike'] / df['underlying']
     df['log_moneyness'] = np.log(df['net_moneyness'])
@@ -208,7 +208,7 @@ def prepare_features(df):
     df['otm_amount'] = df['log_moneyness'] * (1 - 2 * df['is_put'])
     
     # 5-Bucket Moneyness
-    threshold = df['vix'] * 0.005 + df['sqrt_dte'] * 0.001
+    threshold = df['vix'] * 0.004 + df['sqrt_dte'] * 0.001
     df['is_atm'] = (np.abs(df['otm_amount']) <= 0.02).astype(int)
     df['is_otm'] = ((df['otm_amount'] > 0.02) & (df['otm_amount'] <= threshold)).astype(int)
     df['is_deep_otm'] = (df['otm_amount'] > threshold).astype(int)
@@ -273,7 +273,7 @@ def process_file(f):
         if 'impliedVolatility' in df.columns:
             df = df[(df['impliedVolatility'] > IV_MIN) & (df['impliedVolatility'] < IV_MAX)]
         if 'daysToExpiration' in df.columns:
-            df = df[df['daysToExpiration'] >= 0.9]
+            df = df[df['daysToExpiration'] >= 1.1]
 
         # Robust surface filter: remove arbitrage-consistent outliers via IRLS
         df = filter_arbitrage_irls(df)
