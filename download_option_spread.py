@@ -150,7 +150,7 @@ def main():
                     ]
                     
                     # Round numerical columns to 3 decimal places
-                    float_cols = ['strike', 'lastPrice', 'underlyingPriceAtTrade', 'volatilityIndex','bid','ask','bid_ask_spread', 'days_to_expire', 'openInterest']
+                    float_cols = ['strike', 'lastPrice', 'underlyingPriceAtTrade', 'volatilityIndex','bid','ask','bid_ask_spread', 'days_to_expire']
                     for col in float_cols:
                         if col in df.columns:
                             df[col] = df[col].round(3)

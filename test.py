@@ -10,41 +10,16 @@ from scipy.stats import norm
 TICKERS = {
     "nq100": "QQQ",
     "sp500": "SPY",
-    "dowjones" : "DIA",
-    "russel2000": "IWM",
-    "aapl": "AAPL",
-    "msft": "MSFT",
-    "nvda": "NVDA",
-    "tsla": "TSLA",
-    "amzn": "AMZN",
-    "goog": "GOOG",
-    "meta": "META",
-    "avgo": "AVGO",
-    "pltr": "PLTR",
-    "btc": "IBIT",   # iShares Bitcoin Trust ETF
-    "eth": "ETHA",   # iShares Ethereum Trust ETF
-    "gold": "GLD",   # SPDR Gold Shares ETF
-    "silver": "SLV", # iShares Silver Trust ETF
-    "oilstock": "XLE",    # Oil stock
-    "longterm" : "TLT",
 }
 
 # Mapping of tickers to their corresponding CBOE volatility indices
 VOLATILITY_MAP = {
     "SPY": "^VIX",
-    "QQQ": "^VXN",
-    "GLD": "^GVZ",
-    "DIA": "^VXD",
-    "AMZN": "^VXAZN",
-    "AAPL": "^VXAPL",
-    "GOOG": "^VXGOG",
-    "TLT":"^VXTLT",
-    "SLV":"^VXSLV",
 }
 
 
 current_date = datetime.now().strftime("%Y-%m-%d")
-base_folder = "options_data"
+base_folder = "options_data_test"
 date_folder = os.path.join(base_folder, current_date)
 
 if not os.path.exists(date_folder):
@@ -249,8 +224,7 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
 
     # 1. Delete specific columns
     cols_to_drop = [
-        'contractSize', 'currency', 'expirationDate', 
-        'change', 'percentChange', 'bid', 'ask'
+        'contractSize', 'currency', 'expirationDate', 'percentChange',
     ]
     df = df.drop(columns=cols_to_drop, errors='ignore')
 
