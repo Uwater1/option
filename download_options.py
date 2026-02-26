@@ -208,6 +208,10 @@ def get_stock_price_at_time(ticker_symbol, target_datetime, current_price):
     """
     Get the stock price at a specific datetime using cached intraday data.
     If no trade within 5 days, return NaN.
+    1-minute bar index = bar open time (e.g. 14:23:00 covers 14:23:00-14:23:59).
+    - second < 40 : use nearest bar
+    - second >= 40: floor to current minute and use the Close of that bar
+      (avoids 'nearest' accidentally snapping to the next bar's open)
     """
     try:
         if target_datetime.tzinfo is None:
@@ -217,13 +221,22 @@ def get_stock_price_at_time(ticker_symbol, target_datetime, current_price):
         if (now - target_datetime).days > 5:
             return np.float32(np.nan)
 
+        # If second >= 40, floor to the current minute so we look up the bar
+        # that contains this trade time and read its Close price.
+        if target_datetime.second >= 40:
+            lookup_time = target_datetime.replace(second=0, microsecond=0)
+            lookup_method = 'ffill'
+        else:
+            lookup_time = target_datetime
+            lookup_method = 'nearest'
+
         date_str = target_datetime.strftime('%Y-%m-%d')
         hist = _get_intraday_data(ticker_symbol, date_str)
 
         if hist.empty:
             return np.float32(current_price)
 
-        closest_idx = hist.index.get_indexer([target_datetime], method='nearest')[0]
+        closest_idx = hist.index.get_indexer([lookup_time], method=lookup_method)[0]
         if closest_idx >= 0:
             return np.float32(hist['Close'].iloc[closest_idx])
         else:

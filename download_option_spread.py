@@ -41,14 +41,25 @@ def get_price_at_time(ticker_symbol, target_datetime, fallback_price):
         return fallback_price
     
     try:
+        if target_datetime.tzinfo is None:
+            target_datetime = target_datetime.replace(tzinfo=pd.Timestamp.now(tz='UTC').tzinfo)
+
+        # 1-min bar index = bar open time. If second >= 40, 'nearest' would
+        # snap to the next bar's open (only a few seconds away). Instead,
+        # floor to the current minute and use 'ffill' to get the bar that
+        # contains the trade, then read its Close.
+        if target_datetime.second >= 40:
+            lookup_time = target_datetime.replace(second=0, microsecond=0)
+            lookup_method = 'ffill'
+        else:
+            lookup_time = target_datetime
+            lookup_method = 'nearest'
+
         hist = get_intraday_data(ticker_symbol)
         if hist.empty:
             return fallback_price
             
-        if target_datetime.tzinfo is None:
-            target_datetime = target_datetime.replace(tzinfo=pd.Timestamp.now(tz='UTC').tzinfo)
-            
-        closest_idx = hist.index.get_indexer([target_datetime], method='nearest')[0]
+        closest_idx = hist.index.get_indexer([lookup_time], method=lookup_method)[0]
         if closest_idx >= 0:
             return float(hist['Close'].iloc[closest_idx])
     except Exception:
