@@ -267,9 +267,9 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
     ]
     df = df.drop(columns=cols_to_drop, errors='ignore')
 
-    # 2. Rename yfinance IV → IV_yf (percentage, 3dp)
+    # 2. Rename yfinance IV → IV_yf (percentage, 2dp)
     if 'impliedVolatility' in df.columns:
-        df['IV_yf'] = (df['impliedVolatility'] * 100).round(3).astype(np.float32)
+        df['IV_yf'] = (df['impliedVolatility'] * 100).round(2).astype(np.float32)
         df = df.drop(columns=['impliedVolatility'])
 
     # 3. Convert inTheMoney to 0 (False) and 1 (True)

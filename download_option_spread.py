@@ -12,7 +12,9 @@ TICKERS = {
     "nq100": "QQQ",
     "aapl": "AAPL",
     "amzn": "AMZN",
-    "goog": "GOOG"
+    "goog": "GOOG",
+    "silver": "SLV",
+    "gold": "GLD",
 }
 
 VOLATILITY_MAP = {
@@ -20,7 +22,9 @@ VOLATILITY_MAP = {
     "QQQ": "^VXN",
     "AMZN": "^VXAZN",
     "AAPL": "^VXAPL",
-    "GOOG": "^VXGOG"
+    "GOOG": "^VXGOG",
+    "SLV":"^VXSLV",
+    "GLD": "^GVZ",
 }
 
 _intraday_cache = {}
