@@ -224,7 +224,7 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
 
     # 1. Delete specific columns
     cols_to_drop = [
-        'contractSize', 'currency', 'expirationDate', 'percentChange',
+        'contractSize', 'currency', 'expirationDate', 'percentChange','change'
     ]
     df = df.drop(columns=cols_to_drop, errors='ignore')
 
