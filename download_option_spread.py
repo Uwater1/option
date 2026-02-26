@@ -146,11 +146,11 @@ def main():
                     
                     required_cols = [
                         'contractSymbol', 'lastTradeDate', 'strike', 'lastPrice', 'volume', 'openInterest',
-                        'underlyingPriceAtTrade', 'volatilityIndex', 'bid_ask_spread', 'days_to_expire', 'optionType'
+                        'underlyingPriceAtTrade', 'volatilityIndex','bid','ask', 'bid_ask_spread', 'days_to_expire', 'optionType'
                     ]
                     
                     # Round numerical columns to 3 decimal places
-                    float_cols = ['strike', 'lastPrice', 'underlyingPriceAtTrade', 'volatilityIndex', 'bid_ask_spread', 'days_to_expire', 'openInterest']
+                    float_cols = ['strike', 'lastPrice', 'underlyingPriceAtTrade', 'volatilityIndex','bid','ask','bid_ask_spread', 'days_to_expire', 'openInterest']
                     for col in float_cols:
                         if col in df.columns:
                             df[col] = df[col].round(3)

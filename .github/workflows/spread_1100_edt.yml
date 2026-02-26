@@ -4,8 +4,8 @@ on:
   schedule:
     # Run at 15:00 UTC and 16:00 UTC to cover both EDT (UTC-4) and EST (UTC-5)
     # The job itself will exit early if the New York time is not 11:xx
-    - cron: '0 15 * * 1-5'
-    - cron: '0 16 * * 1-5'
+    - cron: '10 15 * * 1-5'
+    - cron: '10 16 * * 1-5'
   workflow_dispatch:
 
 permissions:
@@ -35,12 +35,27 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install dependencies
+      - name: Check for recent download (within last hour)
         if: steps.time_check.outputs.skip == 'false'
+        id: recent_check
+        run: |
+          NY_DATE_HOUR=$(TZ=America/New_York date +'%Y%m%d_%H')
+          SPREAD_DIR="spread/${NY_DATE_HOUR}"
+          echo "Checking for existing downloads in: $SPREAD_DIR"
+          if [ -d "$SPREAD_DIR" ] && ls "$SPREAD_DIR"/*.csv 2>/dev/null | grep -q .; then
+            echo "Recent download detected in $SPREAD_DIR — skipping."
+            echo "skip=true" >> $GITHUB_OUTPUT
+          else
+            echo "No recent download found. Proceeding."
+            echo "skip=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install dependencies
+        if: steps.time_check.outputs.skip == 'false' && steps.recent_check.outputs.skip == 'false'
         run: pip install pandas yfinance numpy pytz
 
       - name: Run spread download script
-        if: steps.time_check.outputs.skip == 'false'
+        if: steps.time_check.outputs.skip == 'false' && steps.recent_check.outputs.skip == 'false'
         id: download
         run: |
           python download_option_spread.py > /tmp/work_log.txt 2>&1
@@ -56,7 +71,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Write work summary
-        if: steps.time_check.outputs.skip == 'false'
+        if: steps.time_check.outputs.skip == 'false' && steps.recent_check.outputs.skip == 'false'
         run: |
           echo "## Spread Download Summary (11:00 NY)" >> $GITHUB_STEP_SUMMARY
           echo "Run completed on $(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S %Z')" >> $GITHUB_STEP_SUMMARY
@@ -64,7 +79,7 @@ jobs:
           echo "${{ steps.download.outputs.log }}" >> $GITHUB_STEP_SUMMARY
 
       - name: Commit and push spread data
-        if: steps.time_check.outputs.skip == 'false'
+        if: steps.time_check.outputs.skip == 'false' && steps.recent_check.outputs.skip == 'false'
         run: |
           git config --global user.email "action@github.com"
           git config --global user.name "GitHub Action"
