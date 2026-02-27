@@ -15,6 +15,8 @@ permissions:
 jobs:
   download-spread:
     runs-on: ubuntu-slim
+    strategy:
+      fail-fast: true
     
     steps:
       - name: Check New York time window
