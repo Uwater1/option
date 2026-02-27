@@ -182,7 +182,8 @@ def main():
             if all_spreads_for_ticker:
                 final_ticker_df = pd.concat(all_spreads_for_ticker, ignore_index=True)
                 underlying_price = f"{current_price:.2f}".replace(".", "_")
-                file_path = os.path.join(spread_folder, f"{ticker_symbol}_{current_date}_{underlying_price}.csv")
+                underlying_vix = f"{vol_current_price:.2f}".replace(".", "_")
+                file_path = os.path.join(spread_folder, f"{ticker_symbol}_{current_date}-{underlying_price}-{underlying_vix}.csv")
                 final_ticker_df.to_csv(file_path, index=False)
                 print(f"Successfully saved {ticker_symbol} spread data to {file_path}")
             
