@@ -345,7 +345,12 @@ def main():
     if full_df.empty:
         print("No data found!")
         return
-    print(f"Total samples after filtering: {len(full_df)}")
+    # Drop exact duplicates caused by options with no new trades appearing in
+    # multiple date directories (same contractSymbol + lastTradeDate → identical row).
+    if 'contractSymbol' in full_df.columns and 'lastTradeDate' in full_df.columns:
+        full_df = full_df.drop_duplicates(subset=['contractSymbol', 'lastTradeDate'])
+    else:
+        full_df = full_df.drop_duplicates()
     
     # 2. Prepare features
     X_full, feature_names = prepare_features(full_df)
