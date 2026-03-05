@@ -25,7 +25,7 @@ MODEL_FILE = "iv_surface_prod.json"
 COMMODITY_TICKERS = {"gold", "silver", "longterm"}   # gold, silver, LongTerm-bond ETF
 STOCK_TICKERS     = {"aapl", "amzn", "goog"}
 INDEX_TICKERS     = {"sp500", "nq100", "dowjones"}
-KNOWN_TICKERS = list(COMMODITY_TICKERS | STOCK_TICKERS | INDEX_TICKERS)
+KNOWN_TICKERS = sorted(COMMODITY_TICKERS | STOCK_TICKERS | INDEX_TICKERS)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── IRLS Surface Filter ──────────────────────────────────────────────────────
@@ -484,13 +484,13 @@ def main():
             'objective': 'reg:squarederror',
             'n_estimators': 2000,
             'max_depth': 10,
-            'learning_rate': 0.034,
-            'min_child_weight': 8,
+            'learning_rate': 0.0335,
+            'min_child_weight': 9,
             'subsample': 0.866,
-            'colsample_bytree': 0.93,
-            'reg_lambda': 8.28,
-            'reg_alpha': 0.276,
-            'gamma': 0.007,
+            'colsample_bytree': 0.9315,
+            'reg_lambda': 8.2831,
+            'reg_alpha': 0.2753,
+            'gamma': 0.0071,
             'early_stopping_rounds': 100,
             'eval_metric': 'rmse',
         }
@@ -517,12 +517,14 @@ def main():
     # --- LightGBM ---
     if "lgb" in train_targets:
         lgb_params = {
-            'n_estimators': 2000,
-            'max_depth': 8,
-            'learning_rate': 0.05,
-            'subsample': 0.9,
-            'colsample_bytree': 0.9,
-            'reg_lambda': 1.5,
+            'max_depth': 10,
+            'learning_rate': 0.0495,
+            'num_leaves': 163,
+            'min_child_samples': 11,
+            'subsample': 0.7260,
+            'colsample_bytree': 0.5424,
+            'reg_lambda': 9.0980,
+            'reg_alpha': 0.0227,
         }
         if args.tune:
             print(f"\n⏳ Tuning LightGBM ({args.tune_trials} trials)...")
@@ -549,9 +551,12 @@ def main():
         cb_params = {
             'iterations': 2000,
             'depth': 8,
-            'learning_rate': 0.05,
-            'l2_leaf_reg': 1.5,
-            'early_stopping_rounds': 50,
+            'learning_rate': 0.2468,
+            'l2_leaf_reg': 2.3247,
+            'subsample': 0.7155,
+            'colsample_bylevel': 0.9375,
+            'min_data_in_leaf': 50,
+            'early_stopping_rounds': 100,
             'verbose': False,
         }
         if args.tune:
@@ -583,23 +588,9 @@ def main():
             'num_trees': 2000,
             'early_stopping_num_trees_look_ahead': 50,
         }
-        if args.tune:
-            print(f"\nTraining YDF with built-in tuner ({args.tune_trials} trials)...")
-            tuner = ydf.RandomSearchTuner(num_trials=args.tune_trials, automatic_search_space=True)
-            learner_kwargs['tuner'] = tuner
-        else:
-            print("\nTraining YDF (no tuner)...")
+        print("\nTraining YDF (no tuner)...")
 
         model_ydf = ydf.GradientBoostedTreesLearner(**learner_kwargs).train(train_ds, valid=val_ds)
-
-        if args.tune:
-            # Print YDF tuner logs (best hyperparameters)
-            logs = model_ydf.hyperparameter_optimizer_logs()
-            if logs and hasattr(logs, 'trials') and logs.trials:
-                best_trial = min(logs.trials, key=lambda t: t.score)
-                print(f"  ✅ YDF best params:")
-                for k, v in best_trial.params.items():
-                    print(f"     {k}: {v:.4f}" if isinstance(v, float) else f"     {k}: {v}")
 
         model_ydf.save("iv_prod_ydf")
         models['ydf'] = model_ydf

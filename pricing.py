@@ -9,13 +9,13 @@ import math
 from numba import jit, vectorize, float64
 
 # --- CONFIGURATION ---
-MODEL_FILE = "iv_surface_prod.json"
+MODEL_FILE = "iv_prod_xgb.json"
 DEFAULT_RATE = 0.0364
 
 COMMODITY_TICKERS = {"gold", "silver", "longterm"}
 STOCK_TICKERS     = {"aapl", "amzn", "goog"}
 INDEX_TICKERS     = {"sp500", "nq100", "dowjones"}
-KNOWN_TICKERS = list(COMMODITY_TICKERS | STOCK_TICKERS | INDEX_TICKERS)
+KNOWN_TICKERS = sorted(COMMODITY_TICKERS | STOCK_TICKERS | INDEX_TICKERS)
 
 def resolve_asset_class(token: str):
     """Resolve a -t value to (is_stock, is_index, is_commodity) flags.
@@ -199,6 +199,8 @@ def main():
         df = pd.DataFrame(data)
         
         X = prepare_features(df)
+        # Reorder columns to exactly match what the model was trained on
+        X = X[model.get_booster().feature_names]
         predicted_iv_log = model.predict(X)[0]
         predicted_iv = np.exp(predicted_iv_log)
         

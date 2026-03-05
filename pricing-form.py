@@ -7,12 +7,13 @@ import math
 from numba import jit, vectorize, float64
 
 # --- CONFIGURATION ---
-MODEL_FILE = "iv_surface_prod.json"
+MODEL_FILE = "iv_prod_xgb.json"
 DEFAULT_RATE = 0.0364
 
 COMMODITY_TICKERS = {"gold", "silver", "longterm"}
 STOCK_TICKERS     = {"aapl", "amzn", "goog"}
 INDEX_TICKERS     = {"sp500", "nq100", "dowjones"}
+KNOWN_TICKERS = sorted(COMMODITY_TICKERS | STOCK_TICKERS | INDEX_TICKERS)
 
 def resolve_asset_class(token: str):
     """Resolve a -t value to (is_stock, is_index, is_commodity) flags."""
@@ -25,7 +26,7 @@ def resolve_asset_class(token: str):
     if t in STOCK_TICKERS:     return 1, 0, 0
     if t in INDEX_TICKERS:     return 0, 1, 0
     if t in COMMODITY_TICKERS: return 0, 0, 1
-    print(f"Warning: unknown ticker/class '{token}', defaulting all asset flags to 0")
+    # Do not print warning here, handle in main
     return 0, 0, 0
 
 # --- NUMBA FUNCTIONS ---
@@ -58,6 +59,38 @@ def black_scholes_numba(S, K, T, r, sigma, is_put):
         price = K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
         
     return price
+
+@jit(nopython=True)
+def calculate_greeks_numba(S, K, T, r, sigma, is_put):
+    if T <= 1e-6 or sigma <= 0 or S <= 0 or K <= 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0
+
+    sqrt_T = math.sqrt(T)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrt_T)
+    d2 = d1 - sigma * sqrt_T
+    
+    nd1 = norm_pdf(d1)
+    
+    delta = 0.0
+    rho = 0.0
+    theta = 0.0
+    
+    if is_put == 0.0:
+        delta = norm_cdf(d1)
+        rho = K * T * math.exp(-r * T) * norm_cdf(d2)
+        theta = (-S * nd1 * sigma / (2 * sqrt_T) 
+                 - r * K * math.exp(-r * T) * norm_cdf(d2))
+    else:
+        delta = -norm_cdf(-d1)
+        rho = -K * T * math.exp(-r * T) * norm_cdf(-d2)
+        theta = (-S * nd1 * sigma / (2 * sqrt_T) 
+                 + r * K * math.exp(-r * T) * norm_cdf(-d2))
+
+    gamma = nd1 / (S * sigma * sqrt_T)
+    vega = S * sqrt_T * nd1 / 100.0
+    theta = theta / 365.0 
+
+    return delta, gamma, vega, theta, rho
 
 # --- FEATURE PREP ---
 def prepare_features(df):
@@ -98,7 +131,7 @@ def prepare_features(df):
         'dte_under_15', 'dte_15_to_40', 'dte_over_40',
         'atm_iv_proxy',
         'is_stock', 'is_index', 'is_commodity'
-    ]
+    ] + [f'ticker_{t}' for t in KNOWN_TICKERS]
     return df[features]
 
 def get_strike_step(underlying):
@@ -117,7 +150,7 @@ def main():
     parser.add_argument("days", type=int, help="Days to expiration")
     parser.add_argument("vix", type=float, help="Volatility Index")
     parser.add_argument("rate", type=float, nargs='?', default=DEFAULT_RATE, help="Risk-free rate (default: 0.0364)")
-    parser.add_argument("-t", type=str, default="", help="Asset type or ticker (stock, index, commodity, aapl, gold ...)")
+    parser.add_argument("-t", type=str, default="", help="Specific ticker (aapl, gold, sp500...)")
     
     args = parser.parse_args()
     
@@ -141,10 +174,14 @@ def main():
     closest_two = sorted_by_dist[:2]
     
     print(f"\nUnderlying: {args.underlying} | Days: {args.days} | VIX: {args.vix} | Rate: {args.rate}")
-    print("-" * 55)
-    print(f"{'CALLS (Price) | IV%':>22} | {'STRIKE':^7} | {'PUTS (Price) | IV%':<22}")
-    print("-" * 55)
+    print("-" * 125)
+    print(f"{'CALLS (Price | IV% | Delta | Gamma | Vega | Theta)':>56} | {'STRIKE':^7} | {'PUTS (Price | IV% | Delta | Gamma | Vega | Theta)':<56}")
+    print("-" * 125)
     
+    ticker = args.t.strip().lower()
+    if ticker and ticker not in KNOWN_TICKERS:
+        print(f"Warning: unknown ticker '{ticker}', defaulting all ticker flags to 0")
+
     # Pre-build dataframes for batch prediction
     # This is much faster than running xgboost predict in a loop 40 times
     rows = []
@@ -161,8 +198,12 @@ def main():
     df_batch['is_stock'] = is_stock
     df_batch['is_index'] = is_index
     df_batch['is_commodity'] = is_commodity
+    for kt in KNOWN_TICKERS:
+        df_batch[f'ticker_{kt}'] = 1 if ticker == kt else 0
     
     X_batch = prepare_features(df_batch)
+    # Reorder columns to exactly match what the model was trained on
+    X_batch = X_batch[model.get_booster().feature_names]
     iv_log_preds = model.predict(X_batch)
     iv_preds = np.exp(iv_log_preds)
     
@@ -181,14 +222,17 @@ def main():
         price_c = black_scholes_numba(args.underlying, K, T, args.rate, sigma_c, 0.0)
         price_p = black_scholes_numba(args.underlying, K, T, args.rate, sigma_p, 1.0)
         
+        dc, gc, vc, tc, rc = calculate_greeks_numba(args.underlying, K, T, args.rate, sigma_c, 0.0)
+        dp, gp, vp, tp, rp = calculate_greeks_numba(args.underlying, K, T, args.rate, sigma_p, 1.0)
+        
         # Format string
-        c_str = f"${price_c:.2f} | {iv_call:.1f}%"
-        p_str = f"${price_p:.2f} | {iv_put:.1f}%"
+        c_str = f"${price_c:5.2f} | {iv_call:5.1f}% | {dc:6.3f} | {gc:5.3f} | {vc:5.3f} | {tc:6.3f}"
+        p_str = f"${price_p:5.2f} | {iv_put:5.1f}% | {dp:6.3f} | {gp:5.3f} | {vp:5.3f} | {tp:6.3f}"
         
         strike_fmt = f"{K:g}" # remove trailing zeros 
         strike_str = f"{strike_fmt}{marker}"
         
-        print(f"{c_str:>22} | {strike_str:^7} | {p_str:<22}")
+        print(f"{c_str:>56} | {strike_str:^7} | {p_str:<56}")
 
 if __name__ == "__main__":
     main()
