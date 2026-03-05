@@ -9,6 +9,11 @@ import multiprocessing as mp
 from datetime import datetime
 import pytz
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.ensemble import ExtraTreesRegressor
+import ydf
+import lightgbm as lgb
+import catboost as cb
+import joblib
 
 # Reuse functions from pricing.py / price_options.py logic
 # For training script, we need robust regex parsers
@@ -327,7 +332,16 @@ def huber_loss(y_true, y_pred, delta=1.0):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="options_data")
+    parser.add_argument("--models", nargs="+", default=["xgb"], 
+                        choices=["xgb", "lgb", "cb", "et", "ydf", "all"],
+                        help="Specify which models to train. 'all' trains all 5.")
     args = parser.parse_args()
+    
+    # Resolve 'all' target
+    if "all" in args.models:
+        train_targets = {"xgb", "lgb", "cb", "et", "ydf"}
+    else:
+        train_targets = set(args.models)
     
     # 1. Load full dataset (Dynamic listing from data directory)
     all_dates = sorted([
@@ -367,59 +381,158 @@ def main():
     print(f"Training samples: {len(X_train)}")
     print(f"Validation samples: {len(X_val)}")
     
-    # 4. Train with early stopping
+    # 4. Train models
     print("\n--- Training Phase ---")
-    model = xgb.XGBRegressor(
-        objective='reg:squarederror',
-        n_estimators=2000,
-        max_depth=8,
-        learning_rate=0.05,
-        min_child_weight=3,
-        subsample=0.9,
-        colsample_bytree=0.9,
-        reg_lambda=1.5,
-        early_stopping_rounds=50,
-        eval_metric='rmse',
-    )
-    model.fit(
-        X_train, y_train,
-        eval_set=[(X_val, y_val)],
-        verbose=50
-    )
-    model.save_model(MODEL_FILE)
-    print(f"\nModel saved to {MODEL_FILE}")
-    print(f"Best iteration: {model.best_iteration}")
-    
+    models = {}
+    predictions = {}
+
+    # --- XGBoost ---
+    if "xgb" in train_targets:
+        print("\nTraining XGBoost...")
+        model_xgb = xgb.XGBRegressor(
+            objective='reg:squarederror',
+            n_estimators=2000,
+            max_depth=8,
+            learning_rate=0.05,
+            min_child_weight=3,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            reg_lambda=1.5,
+            early_stopping_rounds=50,
+            eval_metric='rmse',
+        )
+        model_xgb.fit(
+            X_train, y_train,
+            eval_set=[(X_val, y_val)],
+            verbose=False
+        )
+        model_xgb.save_model("iv_prod_xgb.json")
+        models['xgb'] = model_xgb
+        predictions['xgb'] = model_xgb.predict(X_val)
+        print("XGBoost saved to iv_prod_xgb.json")
+
+    # --- LightGBM ---
+    if "lgb" in train_targets:
+        print("\nTraining LightGBM...")
+        model_lgb = lgb.LGBMRegressor(
+            n_estimators=2000,
+            max_depth=8,
+            learning_rate=0.05,
+            subsample=0.9,
+            colsample_bytree=0.9,
+            reg_lambda=1.5,
+        )
+        model_lgb.fit(
+            X_train, y_train,
+            eval_set=[(X_val, y_val)],
+            callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)]
+        )
+        model_lgb.booster_.save_model("iv_prod_lgb.txt")
+        models['lgb'] = model_lgb
+        predictions['lgb'] = model_lgb.predict(X_val)
+        print("LightGBM saved to iv_prod_lgb.txt")
+
+    # --- CatBoost ---
+    if "cb" in train_targets:
+        print("\nTraining CatBoost...")
+        model_cb = cb.CatBoostRegressor(
+            iterations=2000,
+            depth=8,
+            learning_rate=0.05,
+            l2_leaf_reg=1.5,
+            early_stopping_rounds=50,
+            verbose=False
+        )
+        model_cb.fit(X_train, y_train, eval_set=(X_val, y_val))
+        model_cb.save_model("iv_prod_cb.cbm")
+        models['cb'] = model_cb
+        predictions['cb'] = model_cb.predict(X_val)
+        print("CatBoost saved to iv_prod_cb.cbm")
+
+    # --- ExtraTrees ---
+    if "et" in train_targets:
+        print("\nTraining ExtraTrees...")
+        model_et = ExtraTreesRegressor(
+            n_estimators=200,
+            max_depth=15,
+            n_jobs=-1,
+            random_state=42
+        )
+        model_et.fit(X_train, y_train)
+        joblib.dump(model_et, "iv_prod_extratrees.joblib")
+        models['et'] = model_et
+        predictions['et'] = model_et.predict(X_val)
+        print("ExtraTrees saved to iv_prod_extratrees.joblib")
+
+    # --- YDF ---
+    if "ydf" in train_targets:
+        print("\nTraining YDF with built-in tuner...")
+        train_ds = X_train.copy()
+        train_ds['target'] = y_train
+        val_ds = X_val.copy()
+        val_ds['target'] = y_val
+        
+        # Enable hyperparameter tuning (random search over predefined search space)
+        tuner = ydf.RandomSearchTuner(num_trials=30, automatic_search_space=True)
+
+        model_ydf = ydf.GradientBoostedTreesLearner(
+            label="target",
+            task=ydf.Task.REGRESSION,
+            num_trees=2000,
+            early_stopping_num_trees_look_ahead=50,
+            tuner=tuner,
+        ).train(train_ds, valid=val_ds)
+        
+        model_ydf.save("iv_prod_ydf")
+        models['ydf'] = model_ydf
+        predictions['ydf'] = model_ydf.predict(X_val)
+        print("YDF saved to directory iv_prod_ydf")
+
     # 5. Evaluate on the full validation set
-    y_val_pred_log = model.predict(X_val)
-    y_val_pred = np.exp(y_val_pred_log)
+    print("\n" + "=" * 65)
+    print(f"{'Model':<15} | {'RMSE':<10} | {'MAE':<10} | {'R²':<10} | {'Huber Loss'}")
+    print("-" * 65)
+    
+    results = []
     y_val_actual = np.exp(y_val)
     
-    mse = mean_squared_error(y_val_actual, y_val_pred)
-    mae = mean_absolute_error(y_val_actual, y_val_pred)
-    r2 = r2_score(y_val_actual, y_val_pred)
-    huber = huber_loss(y_val_actual, y_val_pred, delta=1.0)
-    
-    print("\n" + "=" * 55)
-    print("Model Quality Metrics (Validation Set):")
-    print("=" * 55)
-    print(f"RMSE:       {np.sqrt(mse):.4f}")
-    print(f"MAE:        {mae:.4f}")
-    print(f"R²:         {r2:.4f}")
-    print(f"Huber Loss: {huber:.4f}  (delta=1.0)")
-    
-    # 6. Error analysis
+    for name, pred_log in predictions.items():
+        y_val_pred = np.exp(pred_log)
+        
+        mse = mean_squared_error(y_val_actual, y_val_pred)
+        rmse = np.sqrt(mse)
+        mae = mean_absolute_error(y_val_actual, y_val_pred)
+        r2 = r2_score(y_val_actual, y_val_pred)
+        huber = huber_loss(y_val_actual, y_val_pred, delta=1.0)
+        
+        results.append({
+            'Model': name,
+            'RMSE': rmse,
+            'MAE': mae,
+            'R2': r2,
+            'Huber': huber,
+            'y_val_pred': y_val_pred
+        })
+        print(f"{name:<15} | {rmse:<10.4f} | {mae:<10.4f} | {r2:<10.4f} | {huber:.4f}")
+        
+    print("=" * 65)
+
+    best_model = min(results, key=lambda x: x['RMSE'])
+    best_name = best_model['Model']
+    print(f"\n=> Best Model based on RMSE is: {best_name}")
+
+    # 6. Error analysis for the best model
     val_df = X_val.copy()
     val_df['actual_IV'] = y_val_actual.values
-    val_df['predicted_IV'] = y_val_pred
+    val_df['predicted_IV'] = best_model['y_val_pred']
     val_df['abs_error'] = np.abs(val_df['predicted_IV'] - val_df['actual_IV'])
     
-    print("\n--- Top 10 Worst Predictions ---")
+    print(f"\n--- Top 10 Worst Predictions ({best_name}) ---")
     worst = val_df.nlargest(10, 'abs_error')[['log_moneyness', 'days', 'vix', 'is_put', 'actual_IV', 'predicted_IV', 'abs_error']]
     print(worst.to_string(index=False))
     
     # Per-bucket error analysis
-    print("\n--- Error by Moneyness Bucket ---")
+    print(f"\n--- Error by Moneyness Bucket ({best_name}) ---")
     for name, mask in [
         ('Deep ITM', val_df['is_deep_itm'] == 1),
         ('ITM', val_df['is_itm'] == 1),
@@ -433,7 +546,7 @@ def main():
             bucket_rmse = np.sqrt(np.mean(subset['abs_error'] ** 2))
             print(f"  {name:10s}  n={len(subset):5d}  MAE={bucket_mae:.4f}  RMSE={bucket_rmse:.4f}")
     
-    print("\n--- Error by DTE Bucket ---")
+    print(f"\n--- Error by DTE Bucket ({best_name}) ---")
     for name, mask in [('<15d', val_df['dte_under_15'] == 1), ('15-40d', val_df['dte_15_to_40'] == 1), ('>40d', val_df['dte_over_40'] == 1)]:
         subset = val_df[mask]
         if len(subset) > 0:
