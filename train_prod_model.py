@@ -9,11 +9,9 @@ import multiprocessing as mp
 from datetime import datetime
 import pytz
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from sklearn.ensemble import ExtraTreesRegressor
 import ydf
 import lightgbm as lgb
 import catboost as cb
-import joblib
 
 # Reuse functions from pricing.py / price_options.py logic
 # For training script, we need robust regex parsers
@@ -333,13 +331,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="options_data")
     parser.add_argument("--models", nargs="+", default=["xgb"], 
-                        choices=["xgb", "lgb", "cb", "et", "ydf", "all"],
-                        help="Specify which models to train. 'all' trains all 5.")
+                        choices=["xgb", "lgb", "cb", "ydf", "all"],
+                        help="Specify which models to train. 'all' trains all 4.")
     args = parser.parse_args()
     
     # Resolve 'all' target
     if "all" in args.models:
-        train_targets = {"xgb", "lgb", "cb", "et", "ydf"}
+        train_targets = {"xgb", "lgb", "cb", "ydf"}
     else:
         train_targets = set(args.models)
     
@@ -393,12 +391,12 @@ def main():
             objective='reg:squarederror',
             n_estimators=2000,
             max_depth=8,
-            learning_rate=0.05,
+            learning_rate=0.1,
             min_child_weight=3,
             subsample=0.9,
             colsample_bytree=0.9,
             reg_lambda=1.5,
-            early_stopping_rounds=50,
+            early_stopping_rounds=100,
             eval_metric='rmse',
         )
         model_xgb.fit(
@@ -448,21 +446,6 @@ def main():
         models['cb'] = model_cb
         predictions['cb'] = model_cb.predict(X_val)
         print("CatBoost saved to iv_prod_cb.cbm")
-
-    # --- ExtraTrees ---
-    if "et" in train_targets:
-        print("\nTraining ExtraTrees...")
-        model_et = ExtraTreesRegressor(
-            n_estimators=200,
-            max_depth=15,
-            n_jobs=-1,
-            random_state=42
-        )
-        model_et.fit(X_train, y_train)
-        joblib.dump(model_et, "iv_prod_extratrees.joblib")
-        models['et'] = model_et
-        predictions['et'] = model_et.predict(X_val)
-        print("ExtraTrees saved to iv_prod_extratrees.joblib")
 
     # --- YDF ---
     if "ydf" in train_targets:
