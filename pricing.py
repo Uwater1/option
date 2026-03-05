@@ -15,6 +15,7 @@ DEFAULT_RATE = 0.0364
 COMMODITY_TICKERS = {"gold", "silver", "longterm"}
 STOCK_TICKERS     = {"aapl", "amzn", "goog"}
 INDEX_TICKERS     = {"sp500", "nq100", "dowjones"}
+KNOWN_TICKERS = list(COMMODITY_TICKERS | STOCK_TICKERS | INDEX_TICKERS)
 
 def resolve_asset_class(token: str):
     """Resolve a -t value to (is_stock, is_index, is_commodity) flags.
@@ -32,7 +33,7 @@ def resolve_asset_class(token: str):
     if t in STOCK_TICKERS:     return 1, 0, 0
     if t in INDEX_TICKERS:     return 0, 1, 0
     if t in COMMODITY_TICKERS: return 0, 0, 1
-    print(f"Warning: unknown ticker/class '{token}', defaulting all asset flags to 0")
+    # Do not print warning here, handle in main
     return 0, 0, 0
 
 
@@ -141,8 +142,8 @@ def prepare_features(df):
         'is_atm', 'is_otm', 'is_deep_otm', 'is_itm', 'is_deep_itm',
         'dte_under_15', 'dte_15_to_40', 'dte_over_40',
         'atm_iv_proxy',
-        'is_stock', 'is_index', 'is_commodity'
-    ]
+        'is_stock', 'is_index', 'is_commodity',
+    ] + [f'ticker_{t}' for t in KNOWN_TICKERS]
     return df[features]
 
 def main():
@@ -152,7 +153,7 @@ def main():
     parser.add_argument("days", type=int, help="Days to expiration")
     parser.add_argument("vix", type=float, help="Volatility Index")
     parser.add_argument("rate", type=float, nargs='?', default=DEFAULT_RATE, help="Risk-free rate (default: 0.0364)")
-    parser.add_argument("-t", type=str, default="", help="Asset type or ticker (stock, index, commodity, aapl, gold ...)")
+    parser.add_argument("-t", type=str, default="", help="Specific ticker (aapl, gold, sp500...)")
     
     args = parser.parse_args()
     
@@ -173,6 +174,10 @@ def main():
     print(f"{'Type':<6} {'Price':<10} {'IV':<8} {'Delta':<8} {'Gamma':<8} {'Vega':<8} {'Theta':<8}")
     print("-" * 65)
     
+    ticker = args.t.strip().lower()
+    if ticker and ticker not in KNOWN_TICKERS:
+        print(f"Warning: unknown ticker '{ticker}', defaulting all ticker flags to 0")
+
     is_stock, is_index, is_commodity = resolve_asset_class(args.t)
 
     for t in types:
@@ -189,6 +194,8 @@ def main():
             'is_stock': [is_stock],
             'is_index': [is_index]
         }
+        for kt in KNOWN_TICKERS:
+            data[f'ticker_{kt}'] = [1 if ticker == kt else 0]
         df = pd.DataFrame(data)
         
         X = prepare_features(df)

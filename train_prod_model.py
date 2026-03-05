@@ -8,7 +8,8 @@ import re
 import multiprocessing as mp
 from datetime import datetime
 import pytz
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, root_mean_squared_error
+import optuna
 import ydf
 import lightgbm as lgb
 import catboost as cb
@@ -24,6 +25,7 @@ MODEL_FILE = "iv_surface_prod.json"
 COMMODITY_TICKERS = {"gold", "silver", "longterm"}   # gold, silver, LongTerm-bond ETF
 STOCK_TICKERS     = {"aapl", "amzn", "goog"}
 INDEX_TICKERS     = {"sp500", "nq100", "dowjones"}
+KNOWN_TICKERS = list(COMMODITY_TICKERS | STOCK_TICKERS | INDEX_TICKERS)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── IRLS Surface Filter ──────────────────────────────────────────────────────
@@ -232,9 +234,8 @@ def prepare_features(df):
         'is_atm', 'is_otm', 'is_deep_otm', 'is_itm', 'is_deep_itm',
         'dte_under_15', 'dte_15_to_40', 'dte_over_40',
         'atm_iv_proxy',
-        # Asset-class flags
         'is_stock', 'is_index', 'is_commodity',
-    ]
+    ] + [f'ticker_{t}' for t in KNOWN_TICKERS]
     
     return df, features
 
@@ -250,6 +251,10 @@ def _ticker_from_filename(filepath: str) -> str:
 
 def process_file(f):
     try:
+        ticker = _ticker_from_filename(f)
+        if ticker not in KNOWN_TICKERS:
+            return None
+
         # Quick check for required columns in header before full parse
         with open(f, 'r') as file:
             header = file.readline()
@@ -264,6 +269,8 @@ def process_file(f):
         df['is_commodity'] = int(ticker in COMMODITY_TICKERS)
         df['is_stock']     = int(ticker in STOCK_TICKERS)
         df['is_index']     = int(ticker in INDEX_TICKERS)
+        for t in KNOWN_TICKERS:
+            df[f'ticker_{t}'] = int(ticker == t)
         # ────────────────────────────────────────────────────────────────────
 
         # Basic filtering
@@ -327,12 +334,99 @@ def huber_loss(y_true, y_pred, delta=1.0):
     linear = residual - quadratic
     return np.mean(0.5 * quadratic ** 2 + delta * linear)
 
+# ── Optuna Tuning Functions ──────────────────────────────────────────────────
+
+def tune_xgb(X_train, y_train, X_val, y_val, n_trials=50):
+    """Tune XGBoost hyperparameters via Optuna."""
+    def objective(trial):
+        params = {
+            'objective': 'reg:squarederror',
+            'n_estimators': 3000,
+            'max_depth': trial.suggest_int('max_depth', 4, 10),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
+            'min_child_weight': trial.suggest_int('min_child_weight', 1, 10),
+            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+            'reg_lambda': trial.suggest_float('reg_lambda', 0.1, 10.0, log=True),
+            'reg_alpha': trial.suggest_float('reg_alpha', 1e-3, 10.0, log=True),
+            'gamma': trial.suggest_float('gamma', 0.0, 5.0),
+            'early_stopping_rounds': 100,
+            'eval_metric': 'rmse',
+        }
+        model = xgb.XGBRegressor(**params)
+        model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
+        return root_mean_squared_error(y_val, model.predict(X_val))
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(direction='minimize', study_name='xgb_tune')
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+    return study.best_params
+
+
+def tune_lgb(X_train, y_train, X_val, y_val, n_trials=50):
+    """Tune LightGBM hyperparameters via Optuna."""
+    def objective(trial):
+        params = {
+            'n_estimators': 3000,
+            'max_depth': trial.suggest_int('max_depth', 4, 10),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
+            'num_leaves': trial.suggest_int('num_leaves', 31, 255),
+            'min_child_samples': trial.suggest_int('min_child_samples', 5, 50),
+            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+            'reg_lambda': trial.suggest_float('reg_lambda', 0.1, 10.0, log=True),
+            'reg_alpha': trial.suggest_float('reg_alpha', 1e-3, 10.0, log=True),
+            'verbosity': -1,
+        }
+        model = lgb.LGBMRegressor(**params)
+        model.fit(
+            X_train, y_train,
+            eval_set=[(X_val, y_val)],
+            callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)]
+        )
+        return root_mean_squared_error(y_val, model.predict(X_val))
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(direction='minimize', study_name='lgb_tune')
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+    return study.best_params
+
+
+def tune_cb(X_train, y_train, X_val, y_val, n_trials=50):
+    """Tune CatBoost hyperparameters via Optuna."""
+    def objective(trial):
+        params = {
+            'iterations': 3000,
+            'depth': trial.suggest_int('depth', 4, 10),
+            'learning_rate': trial.suggest_float('learning_rate', 0.01, 0.3, log=True),
+            'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', 0.1, 10.0, log=True),
+            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
+            'colsample_bylevel': trial.suggest_float('colsample_bylevel', 0.5, 1.0),
+            'min_data_in_leaf': trial.suggest_int('min_data_in_leaf', 5, 50),
+            'early_stopping_rounds': 50,
+            'verbose': False,
+        }
+        model = cb.CatBoostRegressor(**params)
+        model.fit(X_train, y_train, eval_set=(X_val, y_val))
+        return root_mean_squared_error(y_val, model.predict(X_val))
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    study = optuna.create_study(direction='minimize', study_name='cb_tune')
+    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
+    return study.best_params
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-dir", default="options_data")
     parser.add_argument("--models", nargs="+", default=["xgb"], 
                         choices=["xgb", "lgb", "cb", "ydf", "all"],
                         help="Specify which models to train. 'all' trains all 4.")
+    parser.add_argument("--tune", action="store_true",
+                        help="Run Optuna hyperparameter tuning before training.")
+    parser.add_argument("--tune-trials", type=int, default=50,
+                        help="Number of Optuna trials per model (default: 50).")
     args = parser.parse_args()
     
     # Resolve 'all' target
@@ -386,19 +480,30 @@ def main():
 
     # --- XGBoost ---
     if "xgb" in train_targets:
+        xgb_params = {
+            'objective': 'reg:squarederror',
+            'n_estimators': 2000,
+            'max_depth': 10,
+            'learning_rate': 0.034,
+            'min_child_weight': 8,
+            'subsample': 0.866,
+            'colsample_bytree': 0.93,
+            'reg_lambda': 8.28,
+            'reg_alpha': 0.276,
+            'gamma': 0.007,
+            'early_stopping_rounds': 100,
+            'eval_metric': 'rmse',
+        }
+        if args.tune:
+            print(f"\n⏳ Tuning XGBoost ({args.tune_trials} trials)...")
+            best = tune_xgb(X_train, y_train, X_val, y_val, n_trials=args.tune_trials)
+            xgb_params.update(best)
+            print(f"  ✅ XGBoost best params:")
+            for k, v in best.items():
+                print(f"     {k}: {v:.4f}" if isinstance(v, float) else f"     {k}: {v}")
+
         print("\nTraining XGBoost...")
-        model_xgb = xgb.XGBRegressor(
-            objective='reg:squarederror',
-            n_estimators=2000,
-            max_depth=8,
-            learning_rate=0.1,
-            min_child_weight=3,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            reg_lambda=1.5,
-            early_stopping_rounds=100,
-            eval_metric='rmse',
-        )
+        model_xgb = xgb.XGBRegressor(**xgb_params)
         model_xgb.fit(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
@@ -411,15 +516,24 @@ def main():
 
     # --- LightGBM ---
     if "lgb" in train_targets:
+        lgb_params = {
+            'n_estimators': 2000,
+            'max_depth': 8,
+            'learning_rate': 0.05,
+            'subsample': 0.9,
+            'colsample_bytree': 0.9,
+            'reg_lambda': 1.5,
+        }
+        if args.tune:
+            print(f"\n⏳ Tuning LightGBM ({args.tune_trials} trials)...")
+            best = tune_lgb(X_train, y_train, X_val, y_val, n_trials=args.tune_trials)
+            lgb_params.update(best)
+            print(f"  ✅ LightGBM best params:")
+            for k, v in best.items():
+                print(f"     {k}: {v:.4f}" if isinstance(v, float) else f"     {k}: {v}")
+
         print("\nTraining LightGBM...")
-        model_lgb = lgb.LGBMRegressor(
-            n_estimators=2000,
-            max_depth=8,
-            learning_rate=0.05,
-            subsample=0.9,
-            colsample_bytree=0.9,
-            reg_lambda=1.5,
-        )
+        model_lgb = lgb.LGBMRegressor(**lgb_params)
         model_lgb.fit(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
@@ -432,15 +546,24 @@ def main():
 
     # --- CatBoost ---
     if "cb" in train_targets:
+        cb_params = {
+            'iterations': 2000,
+            'depth': 8,
+            'learning_rate': 0.05,
+            'l2_leaf_reg': 1.5,
+            'early_stopping_rounds': 50,
+            'verbose': False,
+        }
+        if args.tune:
+            print(f"\n⏳ Tuning CatBoost ({args.tune_trials} trials)...")
+            best = tune_cb(X_train, y_train, X_val, y_val, n_trials=args.tune_trials)
+            cb_params.update(best)
+            print(f"  ✅ CatBoost best params:")
+            for k, v in best.items():
+                print(f"     {k}: {v:.4f}" if isinstance(v, float) else f"     {k}: {v}")
+
         print("\nTraining CatBoost...")
-        model_cb = cb.CatBoostRegressor(
-            iterations=2000,
-            depth=8,
-            learning_rate=0.05,
-            l2_leaf_reg=1.5,
-            early_stopping_rounds=50,
-            verbose=False
-        )
+        model_cb = cb.CatBoostRegressor(**cb_params)
         model_cb.fit(X_train, y_train, eval_set=(X_val, y_val))
         model_cb.save_model("iv_prod_cb.cbm")
         models['cb'] = model_cb
@@ -449,23 +572,35 @@ def main():
 
     # --- YDF ---
     if "ydf" in train_targets:
-        print("\nTraining YDF with built-in tuner...")
         train_ds = X_train.copy()
         train_ds['target'] = y_train
         val_ds = X_val.copy()
         val_ds['target'] = y_val
-        
-        # Enable hyperparameter tuning (random search over predefined search space)
-        tuner = ydf.RandomSearchTuner(num_trials=30, automatic_search_space=True)
 
-        model_ydf = ydf.GradientBoostedTreesLearner(
-            label="target",
-            task=ydf.Task.REGRESSION,
-            num_trees=2000,
-            early_stopping_num_trees_look_ahead=50,
-            tuner=tuner,
-        ).train(train_ds, valid=val_ds)
-        
+        learner_kwargs = {
+            'label': "target",
+            'task': ydf.Task.REGRESSION,
+            'num_trees': 2000,
+            'early_stopping_num_trees_look_ahead': 50,
+        }
+        if args.tune:
+            print(f"\nTraining YDF with built-in tuner ({args.tune_trials} trials)...")
+            tuner = ydf.RandomSearchTuner(num_trials=args.tune_trials, automatic_search_space=True)
+            learner_kwargs['tuner'] = tuner
+        else:
+            print("\nTraining YDF (no tuner)...")
+
+        model_ydf = ydf.GradientBoostedTreesLearner(**learner_kwargs).train(train_ds, valid=val_ds)
+
+        if args.tune:
+            # Print YDF tuner logs (best hyperparameters)
+            logs = model_ydf.hyperparameter_optimizer_logs()
+            if logs and hasattr(logs, 'trials') and logs.trials:
+                best_trial = min(logs.trials, key=lambda t: t.score)
+                print(f"  ✅ YDF best params:")
+                for k, v in best_trial.params.items():
+                    print(f"     {k}: {v:.4f}" if isinstance(v, float) else f"     {k}: {v}")
+
         model_ydf.save("iv_prod_ydf")
         models['ydf'] = model_ydf
         predictions['ydf'] = model_ydf.predict(X_val)
