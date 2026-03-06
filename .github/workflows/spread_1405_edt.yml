@@ -1,11 +1,11 @@
-name: Download Spread 14:10 NY
+name: Download Spread 14:05 NY
 
 on:
   schedule:
-    # Run at 18:10 UTC and 19:10 UTC to cover both EDT (UTC-4) and EST (UTC-5)
+    # Run at 18:05 UTC and 19:05 UTC to cover both EDT (UTC-4) and EST (UTC-5)
     # The job itself will exit early if the New York time is not 14:xx
-    - cron: '10 18 * * 1-5'
-    - cron: '10 19 * * 1-5'
+    - cron: '05 18 * * 1-5'
+    - cron: '05 19 * * 1-5'
   workflow_dispatch:
 
 permissions:
@@ -26,9 +26,9 @@ jobs:
           NY_MIN=$(TZ=America/New_York date +'%M')
           echo "Current New York time: $NY_HOUR:$NY_MIN"
           
-          # Accept 13:40 to 14:59
-          if [[ "$NY_HOUR" == "14" ]] || [[ "$NY_HOUR" == "13" && 10#$NY_MIN -ge 40 ]]; then
-            echo "Within 13:40-14:59 NY time window. Proceeding."
+          # Accept 13:35 to 14:59
+          if [[ "$NY_HOUR" == "14" ]] || [[ "$NY_HOUR" == "13" && 10#$NY_MIN -ge 35 ]]; then
+            echo "Within 13:35-14:59 NY time window. Proceeding."
             echo "skip=false" >> $GITHUB_OUTPUT
           else
             echo "Outside target window. Skipping this trigger."
