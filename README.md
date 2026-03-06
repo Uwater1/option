@@ -1,30 +1,58 @@
 # option
 Download option data using yfinance
 
-## IV Prediction Model (`iv_surface_prod.json`)
+## IV Prediction Model (`iv_prod_xgb.json`)
 Recent improvements were made to the Implied Volatility (IV) prediction model (`train_prod_model.py` and `pricing.py`):
-- **Data Filtering**: Excluded extreme IVs (outside 1% to 150%) and near-expiration options (DTE < 0.9).
-- **Target Transformation**: Predicting `log(IV)` to stabilize variance.
-- **Feature Engineering**: Added features like `inv_dte`, `vix_x_log_moneyness`, VIX-based `atm_iv_proxy`, and explicit buckets for Moneyness (Deep ITM, ITM, ATM, OTM, Deep OTM) and DTE.
-- **Training Strategy**: Used full historical dataset (80/20 train/val split) with early stopping.
-- **Performance**: Significant reduction in error (RMSE ~2.77, MAE ~1.01). Error analysis reveals that Deep ITM or very short-dated (<15d) options carry the highest variance, while ATM and longer-dated predictions are highly accurate.
-- **Model Tuning**: Hyperparameters can now be optimized with Optuna by using `--tune` and `--tune-trials <N>`.
+- **Asset Classes**: Added support for specific tickers (`aapl`, `gold`, `sp500`, etc.) and general asset classes (Stock, Index, Commodity).
+- **Data Filtering**: Excluded extreme IVs (outside 1% to 150%) and near-expiration options (DTE < 1.1).
+- **Target Transformation**: Predicting `log(IV)` to stabilize variance for better performance across different volatility regimes.
+- **Feature Engineering**: Added features like `inv_dte`, `vix_x_log_moneyness`, VIX-based `atm_iv_proxy`, and explicit buckets for Moneyness and DTE.
+- **Training Strategy**: Parallel loading of historical CSV data with 80/20 train/val split and Early Stopping.
+- **Model Tuning**: Integrated **Optuna** for hyperparameter optimization across XGBoost, LightGBM, and CatBoost.
 
 ## Usage
-### Training the Model
-Train the core models and optionally optimize hyperparameters using Optuna:
+
+Ensure you are in the virtual environment:
 ```bash
-python train_prod_model.py --models xgb lgb cb ydf --tune --tune-trials 30
+source venv/bin/activate
 ```
 
-### Pricing a Specific Option (`pricing.py`)
-Predict Implied Volatility and Option Greeks (Delta, Gamma, Vega, Theta) for a specific underlying price, strike, DTE, and VIX. You can specify a known ticker via the `-t` argument for model precision:
+### 1. Training the Model
+Train one or more models (XGBoost, LightGBM, CatBoost, YDF). The best model for general prediction is saved as `iv_prod_xgb.json`.
+
 ```bash
-python pricing.py <underlying> <strike> <days> <vix> -t aapl
+# Train XGBoost with Optuna tuning
+python train_prod_model.py --models xgb --tune --tune-trials 50
+
+# Train all supported models
+python train_prod_model.py --models all
 ```
 
-### Pricing an Option Chain (`pricing-form.py`)
-Predict IV, Price, and Greeks for a chain of strikes around the given underlying price:
+### 2. Pricing a Specific Option (`pricing.py`)
+Predicts IV, Price, and Greeks (Delta, Gamma, Vega, Theta, Rho) for a single strike.
+
+**Syntax:**
 ```bash
-python pricing-form.py <underlying> <days> <vix> -t sp500
+python pricing.py <underlying> <strike> <days> <vix> [rate] [-t ticker]
 ```
+
+**Example:**
+```bash
+python pricing.py 500 505 30 18.5 -t sp500
+```
+
+### 3. Pricing an Option Chain (`pricing-form.py`)
+Generates a beautiful console-rendered option chain (10 strikes above/below ATM) with IV skew and Greeks for both Calls and Puts.
+
+**Syntax:**
+```bash
+python pricing-form.py <underlying> <days> <vix> [rate] [-t ticker]
+```
+
+**Example:**
+```bash
+python pricing-form.py 150.5 45 22.1 -t aapl
+```
+
+---
+**Note:** Supported tickers for the `-t` flag include: `gold`, `silver`, `longterm`, `aapl`, `amzn`, `goog`, `sp500`, `nq100`, `dowjones`. Use `stock`, `index`, or `commodity` for general asset class defaults.

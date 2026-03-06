@@ -15,6 +15,8 @@ TICKERS = {
     "goog": "GOOG",
     "silver": "SLV",
     "gold": "GLD",
+    "dowjones" : "DIA",
+    "longterm" : "TLT",
 }
 
 VOLATILITY_MAP = {
@@ -25,6 +27,8 @@ VOLATILITY_MAP = {
     "GOOG": "^VXGOG",
     "SLV":"^VXSLV",
     "GLD": "^GVZ",
+    "TLT":"^VXTLT",
+    "DIA": "^VXD",
 }
 
 _intraday_cache = {}
