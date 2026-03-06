@@ -4,7 +4,7 @@ import sys
 import pandas as pd
 import numpy as np
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 
 TICKERS = {
@@ -82,11 +82,12 @@ def main():
         
     ny_tz = pytz.timezone('America/New_York')
     now_ny = datetime.now(ny_tz)
-    current_date = now_ny.strftime("%Y%m%d_%H")
+    # 50-min threshold: 10:50 -> _11, 11:10 -> _11, 11:50 -> _12
+    current_date = (now_ny + timedelta(minutes=10)).strftime("%Y%m%d_%H")
     
     # We will track when we started to enforce a time limit
     start_time = time.time()
-    MAX_DURATION_SECONDS = 9 * 60 # 9 minutes max allowed
+    MAX_DURATION_SECONDS = 10 * 60 # 10 minutes max allowed
     
     for name, ticker_symbol in TICKERS.items():
         if time.time() - start_time > MAX_DURATION_SECONDS:

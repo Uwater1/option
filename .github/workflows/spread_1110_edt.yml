@@ -23,12 +23,16 @@ jobs:
         id: time_check
         run: |
           NY_HOUR=$(TZ=America/New_York date +'%H')
-          echo "Current New York hour: $NY_HOUR"
-          if [ "$NY_HOUR" != "11" ]; then
-            echo "Not 11:xx NY time (got hour=$NY_HOUR). Skipping this trigger."
-            echo "skip=true" >> $GITHUB_OUTPUT
-          else
+          NY_MIN=$(TZ=America/New_York date +'%M')
+          echo "Current New York time: $NY_HOUR:$NY_MIN"
+          
+          # Accept 10:30 to 11:59
+          if [[ "$NY_HOUR" == "11" ]] || [[ "$NY_HOUR" == "10" && 10#$NY_MIN -ge 30 ]]; then
+            echo "Within 10:30-11:59 NY time window. Proceeding."
             echo "skip=false" >> $GITHUB_OUTPUT
+          else
+            echo "Outside target window. Skipping this trigger."
+            echo "skip=true" >> $GITHUB_OUTPUT
           fi
 
       - name: Checkout repository
@@ -37,15 +41,14 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Check for recent download (within last hour)
+      - name: Check for recent download (within last 2 hours)
         if: steps.time_check.outputs.skip == 'false'
         id: recent_check
         run: |
-          NY_DATE_HOUR=$(TZ=America/New_York date +'%Y%m%d_%H')
-          SPREAD_DIR="spread/${NY_DATE_HOUR}"
-          echo "Checking for existing downloads in: $SPREAD_DIR"
-          if [ -d "$SPREAD_DIR" ] && ls "$SPREAD_DIR"/*.csv 2>/dev/null | grep -q .; then
-            echo "Recent download detected in $SPREAD_DIR — skipping."
+          NY_DATE=$(TZ=America/New_York date +'%Y%m%d')
+          # Check for current likely folder (10:50/11:10 -> _11) and late runs (_12)
+          if (ls -d spread/${NY_DATE}_11/ spread/${NY_DATE}_12/ 2>/dev/null | xargs -I {} ls {}/*.csv 2>/dev/null | grep -q .); then
+            echo "Recent download detected in spread/${NY_DATE}_11/ or _12/ — skipping."
             echo "skip=true" >> $GITHUB_OUTPUT
           else
             echo "No recent download found. Proceeding."
@@ -63,8 +66,9 @@ jobs:
           python download_option_spread.py > /tmp/work_log.txt 2>&1
           cat /tmp/work_log.txt
           
-          # Organize into date_hour folder using New York Time
-          DIR="spread/$(TZ=America/New_York date +'%Y%m%d_%H')"
+          # Organize into date_hour folder using (New York Time + 10 minutes)
+          # threshold at 50 mins: 10:50 -> _11, 11:10 -> _11, 11:50 -> _12
+          DIR="spread/$(TZ=America/New_York date -d '+10 minutes' +'%Y%m%d_%H')"
           mkdir -p "$DIR"
           mv spread/*.csv "$DIR/" 2>/dev/null || true
           
@@ -75,7 +79,7 @@ jobs:
       - name: Write work summary
         if: steps.time_check.outputs.skip == 'false' && steps.recent_check.outputs.skip == 'false'
         run: |
-          echo "## Spread Download Summary (11:00 NY)" >> $GITHUB_STEP_SUMMARY
+          echo "## Spread Download Summary (Target 11:00 NY)" >> $GITHUB_STEP_SUMMARY
           echo "Run completed on $(TZ=America/New_York date +'%Y-%m-%d %H:%M:%S %Z')" >> $GITHUB_STEP_SUMMARY
           echo "### Execution Log" >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.download.outputs.log }}" >> $GITHUB_STEP_SUMMARY
