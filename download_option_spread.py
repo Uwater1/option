@@ -95,7 +95,7 @@ def main():
             break
             
         try:
-            print(f"Downloading spread data for {name} ({ticker_symbol})...")
+            #print(f"Downloading spread data for {name} ({ticker_symbol})...")
             tk = yf.Ticker(ticker_symbol)
             
             # Get current price
