@@ -46,9 +46,9 @@ jobs:
         id: recent_check
         run: |
           NY_DATE=$(TZ=America/New_York date +'%Y%m%d')
-          # Check for current likely folder (10:50/11:10 -> _11) and late runs (_12)
-          if (ls -d spread/${NY_DATE}_11/ spread/${NY_DATE}_12/ 2>/dev/null | xargs -I {} ls {}/*.csv 2>/dev/null | grep -q .); then
-            echo "Recent download detected in spread/${NY_DATE}_11/ or _12/ — skipping."
+          # Check for current likely folder (10:50/11:10 -> _10) and late runs (_11)
+          if (ls -d spread/${NY_DATE}_10/ spread/${NY_DATE}_11/ 2>/dev/null | xargs -I {} ls {}/*.csv 2>/dev/null | grep -q .); then
+            echo "Recent download detected in spread/${NY_DATE}_10/ or _11/ — skipping."
             echo "skip=true" >> $GITHUB_OUTPUT
           else
             echo "No recent download found. Proceeding."

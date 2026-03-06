@@ -298,7 +298,7 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
             except Exception:
                 pass
 
-        print(f"    Looking up underlying prices at trade times ({len(unique_dates)} unique dates)...")
+        #print(f"    Looking up underlying prices at trade times ({len(unique_dates)} unique dates)...")
         df['underlyingPriceAtTrade'] = df['lastTradeDate'].apply(
             lambda x: get_stock_price_at_time(ticker_symbol, x, current_price) if pd.notna(x) else np.float32(np.nan)
         ).astype(np.float32)
@@ -326,7 +326,7 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
     mp_arr = df['lastPrice'].values.astype(np.float64) if 'lastPrice' in df.columns else np.full(len(df), np.nan)
     is_call = np.full(len(df), option_type == 'call')
 
-    print(f"    Calculating Black-Scholes IV (n={len(df)}, r={risk_free_rate:.4f}, type={option_type})...")
+    #print(f"    Calculating Black-Scholes IV (n={len(df)}, r={risk_free_rate:.4f}, type={option_type})...")
     df['impliedVolatility'] = calculate_iv_vectorized(mp_arr, S_arr, K_arr, T_arr, float(risk_free_rate), is_call)
 
     # 7. Add risk-free rate column
@@ -334,7 +334,7 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
 
     # 8. Add volatility index value
     if vol_index_symbol:
-        print(f"    Adding volatility index ({vol_index_symbol})...")
+        #print(f"    Adding volatility index ({vol_index_symbol})...")
         if 'lastTradeDate' in df.columns:
             df['volatilityIndex'] = df['lastTradeDate'].apply(
                 lambda x: get_stock_price_at_time(vol_index_symbol, x, np.nan) if pd.notna(x) else np.float32(np.nan)
