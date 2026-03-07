@@ -26,9 +26,9 @@ jobs:
           NY_MIN=$(TZ=America/New_York date +'%M')
           echo "Current New York time: $NY_HOUR:$NY_MIN"
           
-          # Accept 13:35 to 14:59
-          if [[ "$NY_HOUR" == "14" ]] || [[ "$NY_HOUR" == "13" && 10#$NY_MIN -ge 35 ]]; then
-            echo "Within 13:35-14:59 NY time window. Proceeding."
+          # Accept 13:45 to 14:59
+          if [[ "$NY_HOUR" == "14" ]] || [[ "$NY_HOUR" == "13" && 10#$NY_MIN -ge 45 ]]; then
+            echo "Within 13:45-14:59 NY time window. Proceeding."
             echo "skip=false" >> $GITHUB_OUTPUT
           else
             echo "Outside target window. Skipping this trigger."
