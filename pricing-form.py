@@ -140,9 +140,9 @@ def get_strike_step(underlying):
     elif underlying <= 100:
         return 1.0
     elif underlying <= 500:
-        return 5.0
+        return 2.5
     else:
-        return 10.0
+        return 5.0
 
 def main():
     parser = argparse.ArgumentParser(description="Price option chain form.")
@@ -166,8 +166,8 @@ def main():
     step = get_strike_step(args.underlying)
     center_strike = round(args.underlying / step) * step
     
-    # 10 strikes below and 10 above
-    strikes = [center_strike + i * step for i in range(-10, 11)]
+    # 16 strikes below and 16 above
+    strikes = [center_strike + i * step for i in range(-16, 17)]
     
     # Find the 2 strikes closest to underlying
     sorted_by_dist = sorted(strikes, key=lambda x: abs(x - args.underlying))
