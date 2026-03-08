@@ -11,7 +11,6 @@ DEFAULT_RATE = 0.0364
 # --- BLACK-SCHOLES MATH (Pure Python, Zero Overhead) ---
 
 def cdf(x):
-    """Standard Normal CDF using math.erf (zero dependency)"""
     return 0.5 * (1 + math.erf(x / 1.4142135623730951))
 
 def get_features(underlying, strike, days, vix):
