@@ -16,8 +16,8 @@ def cdf(x):
 def get_features(underlying, strike, days, vix):
     log_moneyness = math.log(strike / underlying)
     moneyness_sq = log_moneyness ** 2
-    sqrt_dte = math.sqrt(max(days, 0.001))
-    inv_dte = 1.0 / max(days, 0.001)
+    sqrt_dte = math.sqrt(max(days, 0.01))
+    inv_dte = 1.0 / max(days, 0.01)
     vix_sq = vix ** 2
     vix_x_dte = vix * sqrt_dte
     vix_x_log_moneyness = vix * log_moneyness
