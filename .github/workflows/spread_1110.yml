@@ -23,7 +23,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           sparse-checkout: |
             download_option_spread.py
-            spread
+            spread/
 
       - name: Install dependencies
         run: pip install pandas yfinance numpy pytz
