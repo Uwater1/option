@@ -16,16 +16,25 @@ def cdf(x):
 def get_features(underlying, strike, days, vix):
     log_moneyness = math.log(strike / underlying)
     moneyness_sq = log_moneyness ** 2
-    sqrt_dte = math.sqrt(max(days, 0.01))
-    inv_dte = 1.0 / max(days, 0.01)
-    vix_sq = vix ** 2
+    abs_log_moneyness = abs(log_moneyness)
+    
+    sqrt_dte = math.sqrt(max(days, 0.001))
+    inv_dte = 1.0 / max(days, 0.001)
+    inv_sqrt_dte = 1.0 / math.sqrt(max(days, 1e-4))
+    
+    log_vix = math.log(max(vix, 1.0))
+    # vix_sq dropped
+    
     vix_x_dte = vix * sqrt_dte
     vix_x_log_moneyness = vix * log_moneyness
+    log_moneyness_x_sqrt_dte = log_moneyness * sqrt_dte
     
     # Order must match iv_lin_params.json['features']
     return np.array([
-        log_moneyness, moneyness_sq, float(days), sqrt_dte, inv_dte,
-        vix, vix_sq, vix_x_dte, vix_x_log_moneyness
+        log_moneyness, moneyness_sq, abs_log_moneyness,
+        float(days), sqrt_dte, inv_dte, inv_sqrt_dte,
+        vix, log_vix, vix_x_dte, vix_x_log_moneyness,
+        log_moneyness_x_sqrt_dte
     ])
 
 def predict_iv(features, params):

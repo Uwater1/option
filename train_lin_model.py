@@ -22,7 +22,7 @@ IRLS_C                 = 1.345
 IRLS_BASE_THRESHOLD    = 3.5
 IRLS_MIN_ABS_DEV       = 3.0
 IRLS_MIN_POINTS        = 10
-IRLS_MAX_ITER          = 50
+IRLS_MAX_ITER          = 100
 IRLS_L2_PENALTY        = 1e-4
 IV_MIN                 = 2.0
 IV_MAX                 = 150.0
@@ -125,15 +125,24 @@ def prepare_features_lin(df):
     # Calculate base features
     df['log_moneyness'] = np.log(df['strike'] / df['underlying'])
     df['moneyness_sq'] = df['log_moneyness'] ** 2
+    df['abs_log_moneyness'] = np.abs(df['log_moneyness'])
+    
     df['sqrt_dte'] = np.sqrt(np.maximum(df['days'], 0.001))
     df['inv_dte'] = 1.0 / np.maximum(df['days'], 0.001)
-    df['vix_sq'] = df['vix'] ** 2
+    df['inv_sqrt_dte'] = 1.0 / np.sqrt(np.maximum(df['days'], 1e-4))
+    
+    df['log_vix'] = np.log(np.maximum(df['vix'], 1.0))
+    # df['vix_sq'] = df['vix'] ** 2  # Dropped per request
+    
     df['vix_x_dte'] = df['vix'] * df['sqrt_dte']
     df['vix_x_log_moneyness'] = df['vix'] * df['log_moneyness']
+    df['log_moneyness_x_sqrt_dte'] = df['log_moneyness'] * df['sqrt_dte']
     
     features = [
-        'log_moneyness', 'moneyness_sq', 'days', 'sqrt_dte', 'inv_dte',
-        'vix', 'vix_sq', 'vix_x_dte', 'vix_x_log_moneyness'
+        'log_moneyness', 'moneyness_sq', 'abs_log_moneyness',
+        'days', 'sqrt_dte', 'inv_dte', 'inv_sqrt_dte',
+        'vix', 'log_vix', 'vix_x_dte', 'vix_x_log_moneyness',
+        'log_moneyness_x_sqrt_dte'
     ]
     return df[features], features
 
