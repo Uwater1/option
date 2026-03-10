@@ -25,7 +25,7 @@ jobs:
             options_data/
 
       - name: Install dependencies
-        run: pip install pandas yfinance numpy scipy numpy
+        run: pip install pandas yfinance numpy scipy fastparquet
 
       - name: Run options download script
         id: download

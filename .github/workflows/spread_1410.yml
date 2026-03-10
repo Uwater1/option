@@ -26,7 +26,7 @@ jobs:
             spread/
 
       - name: Install dependencies
-        run: pip install pandas yfinance numpy pytz
+        run: pip install pandas yfinance numpy pytz fastparquet
 
       - name: Run spread download script
         id: download
@@ -38,7 +38,7 @@ jobs:
           # threshold at 50 mins: 14:50 -> _15, 15:10 -> _15, 15:50 -> _16
           DIR="spread/$(TZ=America/New_York date -d '+10 minutes' +'%Y%m%d_%H')"
           mkdir -p "$DIR"
-          mv spread/*.csv "$DIR/" 2>/dev/null || true
+          mv spread/*.parquet "$DIR/" 2>/dev/null || true
           
           echo "log<<EOF" >> $GITHUB_OUTPUT
           cat /tmp/work_log.txt >> $GITHUB_OUTPUT
