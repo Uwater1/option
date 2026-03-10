@@ -12,6 +12,9 @@ Recent improvements were made to the Implied Volatility (IV) prediction model (`
 
 ## Usage
 
+Data are stored in Parquet format, in the `options_data` and `spread` directories.
+You can see some examples in DATA.md
+
 Ensure you are in the virtual environment:
 ```bash
 source venv/bin/activate
