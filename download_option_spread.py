@@ -193,8 +193,8 @@ def main():
                 final_ticker_df = pd.concat(all_spreads_for_ticker, ignore_index=True)
                 underlying_price_str = f"{current_price:.2f}".replace(".", "_")
                 underlying_vix_str = f"{vol_current_price:.2f}".replace(".", "_")
-                file_path = os.path.join(spread_folder, f"{ticker_symbol}_{current_date}-{underlying_price_str}-{underlying_vix_str}.csv")
-                final_ticker_df.to_csv(file_path, index=False)
+                file_path = os.path.join(spread_folder, f"{ticker_symbol}_{current_date}-{underlying_price_str}-{underlying_vix_str}.parquet")
+                final_ticker_df.to_parquet(file_path, index=False)
                 print(f"Successfully saved {ticker_symbol} spread data to {file_path}")
             
         except Exception as e:

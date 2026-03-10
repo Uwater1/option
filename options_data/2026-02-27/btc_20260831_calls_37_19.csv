@@ -1,4 +1,0 @@
-contractSymbol,lastTradeDate,strike,lastPrice,bid,ask,volume,openInterest,inTheMoney,IV_yf,underlyingPriceAtTrade,impliedVolatility,riskFreeRate
-IBIT260831C00041000,2026-02-27 17:45:52+00:00,41.0,4.1,4.0,4.2,1.0,5,0,52.49,37.1,50.791,0.0363
-IBIT260831C00045000,2026-02-27 20:29:18+00:00,45.0,2.81,2.74,2.88,1.0,27,0,50.95,37.19,49.1948,0.0363
-IBIT260831C00046000,2026-02-27 16:26:15+00:00,46.0,2.64,2.48,2.64,4.0,20,0,50.76,37.4401,48.959,0.0363

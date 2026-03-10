@@ -255,13 +255,17 @@ def process_file(f):
         if ticker not in KNOWN_TICKERS:
             return None
 
-        # Quick check for required columns in header before full parse
-        with open(f, 'r') as file:
-            header = file.readline()
-        if 'volatilityIndex' not in header:
-            return None
-
-        df = pd.read_csv(f)
+        if f.endswith('.parquet'):
+            # Parquet files are already structured, no need for header check
+            df = pd.read_parquet(f)
+        else:
+            # Quick check for required columns in header before full parse for CSV
+            with open(f, 'r') as file:
+                header = file.readline()
+            if 'volatilityIndex' not in header:
+                return None
+            df = pd.read_csv(f)
+            
         df = enrich_data(df)
 
         # ── Asset-class features derived from filename ticker ────────────────
@@ -312,7 +316,13 @@ def load_data_from_range(data_dir, date_range):
         if not os.path.exists(path):
             print(f"Warning: Directory {path} does not exist.")
             continue
-        files = glob.glob(os.path.join(path, "*.csv"))
+            
+        # Try parquet first
+        files = glob.glob(os.path.join(path, "*.parquet"))
+        if not files:
+            # Fall back to CSV if no parquet files
+            files = glob.glob(os.path.join(path, "*.csv"))
+            
         all_files.extend(files)
         
     print(f"Found {len(all_files)} files to process. Starting parallel load...")

@@ -88,7 +88,12 @@ def process_file(f):
     try:
         ticker = os.path.basename(f).split('_')[0].lower()
         if ticker not in KNOWN_TICKERS: return None
-        df = pd.read_csv(f)
+        
+        if f.endswith('.parquet'):
+            df = pd.read_parquet(f)
+        else:
+            df = pd.read_csv(f)
+            
         df = enrich_data(df)
         if 'lastPrice' in df.columns: df = df[df['lastPrice'] > 0.01]
         if 'volume' in df.columns: df = df[df['volume'] >= 10]
@@ -105,7 +110,11 @@ def load_data_from_range(data_dir, date_range):
     all_files = []
     for date_str in date_range:
         path = os.path.join(data_dir, date_str)
-        if os.path.exists(path): all_files.extend(glob.glob(os.path.join(path, "*.csv")))
+        if os.path.exists(path):
+            files = glob.glob(os.path.join(path, "*.parquet"))
+            if not files:
+                files = glob.glob(os.path.join(path, "*.csv"))
+            all_files.extend(files)
     print(f"Loading {len(all_files)} files...")
     all_data = []
     with mp.Pool(mp.cpu_count()) as pool:

@@ -355,11 +355,11 @@ if __name__ == "__main__":
                     # Download option chain
                     chain = tk.option_chain(date)
 
-                    # Format filename: options_data/2026-02-10/aapl_20260217_calls_150_50.csv
+                    # Format filename: options_data/2026-02-10/aapl_20260217_calls_150_50.parquet
                     safe_date = date.replace("-", "")
                     price_str = f"{current_price:.2f}".replace(".", "_")
-                    calls_file = os.path.join(date_folder, f"{name}_{safe_date}_calls_{price_str}.csv")
-                    puts_file = os.path.join(date_folder, f"{name}_{safe_date}_puts_{price_str}.csv")
+                    calls_file = os.path.join(date_folder, f"{name}_{safe_date}_calls_{price_str}.parquet")
+                    puts_file = os.path.join(date_folder, f"{name}_{safe_date}_puts_{price_str}.parquet")
 
                     # Get volatility index if mapped
                     vol_symbol = VOLATILITY_MAP.get(ticker_symbol)
@@ -370,7 +370,7 @@ if __name__ == "__main__":
                             chain.calls.copy(), ticker_symbol, current_price, 
                             risk_free_rate, date, 'call', vol_symbol
                         )
-                        cleaned_calls.to_csv(calls_file, index=False)
+                        cleaned_calls.to_parquet(calls_file, index=False)
                         print(f"  Saved {len(cleaned_calls)} calls to {os.path.basename(calls_file)}")
 
                     # Process and Save Puts
@@ -379,7 +379,7 @@ if __name__ == "__main__":
                             chain.puts.copy(), ticker_symbol, current_price, 
                             risk_free_rate, date, 'put', vol_symbol
                         )
-                        cleaned_puts.to_csv(puts_file, index=False)
+                        cleaned_puts.to_parquet(puts_file, index=False)
                         print(f"  Saved {len(cleaned_puts)} puts to {os.path.basename(puts_file)}")
 
                     # Sleep to prevent rate limiting
