@@ -1,0 +1,9 @@
+  ✅ XGBoost best params:
+     max_depth: 8
+     learning_rate: 0.0104
+     min_child_weight: 3
+     subsample: 0.6724
+     colsample_bytree: 0.6631
+     reg_lambda: 4.4372
+     reg_alpha: 2.4430
+     gamma: 0.0073

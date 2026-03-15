@@ -396,7 +396,16 @@ def tune_xgb(X_train, y_train, X_val, y_val, n_trials=50):
             params.update({'tree_method': 'hist', 'device': 'cuda'})
         model = xgb.XGBRegressor(**params)
         model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
-        return np.sqrt(mean_squared_error(y_val, model.predict(X_val)))
+        
+        # Use DMatrix for prediction if on GPU to avoid device mismatch warnings
+        # and improve performance during tuning trials.
+        if CUDA_AVAILABLE:
+            dval = xgb.DMatrix(X_val)
+            preds = model.get_booster().predict(dval)
+        else:
+            preds = model.predict(X_val)
+            
+        return np.sqrt(mean_squared_error(y_val, preds))
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction='minimize', study_name='xgb_tune')
@@ -427,7 +436,8 @@ def tune_lgb(X_train, y_train, X_val, y_val, n_trials=50):
             eval_set=[(X_val, y_val)],
             callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)]
         )
-        return np.sqrt(mean_squared_error(y_val, model.predict(X_val)))
+        preds = model.predict(X_val)
+        return np.sqrt(mean_squared_error(y_val, preds))
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction='minimize', study_name='lgb_tune')
@@ -448,12 +458,14 @@ def tune_cb(X_train, y_train, X_val, y_val, n_trials=50):
             'min_data_in_leaf': trial.suggest_int('min_data_in_leaf', 5, 50),
             'early_stopping_rounds': 50,
             'verbose': False,
+            'allow_writing_files': False,
         }
         if CUDA_AVAILABLE:
-            params.update({'task_type': 'GPU'})
+            params.update({'task_type': 'GPU', 'devices': '0'})
         model = cb.CatBoostRegressor(**params)
         model.fit(X_train, y_train, eval_set=(X_val, y_val))
-        return np.sqrt(mean_squared_error(y_val, model.predict(X_val)))
+        preds = model.predict(X_val)
+        return np.sqrt(mean_squared_error(y_val, preds))
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction='minimize', study_name='cb_tune')
@@ -532,14 +544,14 @@ def main():
         xgb_params = {
             'objective': 'reg:squarederror',
             'n_estimators': 2000,
-            'max_depth': 10,
-            'learning_rate': 0.0335,
-            'min_child_weight': 9,
-            'subsample': 0.866,
-            'colsample_bytree': 0.9315,
-            'reg_lambda': 8.2831,
-            'reg_alpha': 0.2753,
-            'gamma': 0.0071,
+            'max_depth': 8,
+            'learning_rate': 0.0104,
+            'min_child_weight': 3,
+            'subsample': 0.6724,
+            'colsample_bytree': 0.6631,
+            'reg_lambda': 4.4372,
+            'reg_alpha': 2.4430,
+            'gamma': 0.0073,
             'early_stopping_rounds': 100,
             'eval_metric': 'rmse',
         }
@@ -563,7 +575,10 @@ def main():
         )
         model_xgb.save_model("iv_prod_xgb.json")
         models['xgb'] = model_xgb
-        predictions['xgb'] = model_xgb.predict(X_val)
+        if CUDA_AVAILABLE:
+            predictions['xgb'] = model_xgb.get_booster().predict(xgb.DMatrix(X_val))
+        else:
+            predictions['xgb'] = model_xgb.predict(X_val)
         print("XGBoost saved to iv_prod_xgb.json")
 
     # --- LightGBM ---
@@ -613,9 +628,10 @@ def main():
             'min_data_in_leaf': 50,
             'early_stopping_rounds': 100,
             'verbose': False,
+            'allow_writing_files': False,
         }
         if CUDA_AVAILABLE:
-            cb_params.update({'task_type': 'GPU'})
+            cb_params.update({'task_type': 'GPU', 'devices': '0'})
         if args.tune:
             print(f"\n⏳ Tuning CatBoost ({args.tune_trials} trials)...")
             best = tune_cb(X_train, y_train, X_val, y_val, n_trials=args.tune_trials)
