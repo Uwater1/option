@@ -9,7 +9,7 @@ import re
 import multiprocessing as mp
 from datetime import datetime
 import pytz
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score, root_mean_squared_error
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import optuna
 import ydf
 import lightgbm as lgb
@@ -78,7 +78,13 @@ def enrich_data(df):
             
             # Parse trade date for DTE calculation
             if 'lastTradeDate' in df.columns:
-                trade_date_utc = pd.to_datetime(df['lastTradeDate'], unit='s', utc=True)
+                # Most data has string dates like '2026-03-09 16:16:57+00:00'
+                # but some might have unix timestamps. Try both.
+                try:
+                    # Try numeric first if it looks like one, or just try to_datetime
+                     trade_date_utc = pd.to_datetime(df['lastTradeDate'], utc=True)
+                except:
+                     trade_date_utc = pd.to_datetime(df['lastTradeDate'], unit='s', utc=True)
 
                 # Options expire at 16:00 New York Time — localize correctly to handle DST
                 _ny_tz = pytz.timezone('America/New_York')
@@ -98,6 +104,10 @@ def enrich_data(df):
                     (expiry_utc - trade_date_utc).dt.total_seconds() / 86400.0
                 )
     
+    # Standardize volatilityIndex column name
+    if 'volatilityIndex' in df.columns:
+        df['volatilityIndex'] = pd.to_numeric(df['volatilityIndex'], errors='coerce')
+            
     return df
 
 
@@ -204,6 +214,7 @@ def prepare_features(df):
     cols = ['strike', 'underlying', 'days', 'vix', 'is_put']
     for c in cols:
         df[c] = pd.to_numeric(df[c], errors='coerce')
+    
     df = df.dropna(subset=cols)
     df = df[df['days'] >= 1.1]
     
@@ -304,6 +315,7 @@ def process_file(f):
         # Robust surface filter: remove arbitrage-consistent outliers via IRLS
         df = filter_arbitrage_irls(df)
 
+        # volatilityIndex check
         required = ['strikePrice', 'underlyingPriceAtTrade', 'daysToExpiration',
                     'volatilityIndex', 'is_put', 'impliedVolatility']
         if not all(col in df.columns for col in required):
@@ -313,8 +325,10 @@ def process_file(f):
 
         if len(df) > 0:
             return df
-    except:
-        pass
+    except Exception as e:
+        # Avoid printing thousand of errors, but print enough to debug
+        if os.environ.get('DEBUG_LOAD') == '1':
+            print(f"Error processing {f}: {e}")
     return None
 
 def load_data_from_range(data_dir, date_range):
@@ -379,7 +393,7 @@ def tune_xgb(X_train, y_train, X_val, y_val, n_trials=50):
             params.update({'tree_method': 'hist', 'device': 'cuda'})
         model = xgb.XGBRegressor(**params)
         model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
-        return root_mean_squared_error(y_val, model.predict(X_val))
+        return np.sqrt(mean_squared_error(y_val, model.predict(X_val)))
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction='minimize', study_name='xgb_tune')
@@ -410,7 +424,7 @@ def tune_lgb(X_train, y_train, X_val, y_val, n_trials=50):
             eval_set=[(X_val, y_val)],
             callbacks=[lgb.early_stopping(stopping_rounds=50, verbose=False)]
         )
-        return root_mean_squared_error(y_val, model.predict(X_val))
+        return np.sqrt(mean_squared_error(y_val, model.predict(X_val)))
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction='minimize', study_name='lgb_tune')
@@ -436,7 +450,7 @@ def tune_cb(X_train, y_train, X_val, y_val, n_trials=50):
             params.update({'task_type': 'GPU'})
         model = cb.CatBoostRegressor(**params)
         model.fit(X_train, y_train, eval_set=(X_val, y_val))
-        return root_mean_squared_error(y_val, model.predict(X_val))
+        return np.sqrt(mean_squared_error(y_val, model.predict(X_val)))
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     study = optuna.create_study(direction='minimize', study_name='cb_tune')

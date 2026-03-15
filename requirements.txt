@@ -13,6 +13,7 @@ ydf
 
 # Optimization & Features
 optuna
+tqdm
 numba
 pytz
 yfinance
