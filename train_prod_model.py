@@ -13,6 +13,17 @@ import optuna
 import ydf
 import lightgbm as lgb
 import catboost as cb
+import subprocess
+
+def detect_cuda():
+    """Detect if CUDA is available via nvidia-smi."""
+    try:
+        subprocess.check_output(['nvidia-smi'], stderr=subprocess.STDOUT)
+        return True
+    except:
+        return False
+
+CUDA_AVAILABLE = detect_cuda()
 
 # Reuse functions from pricing.py / price_options.py logic
 # For training script, we need robust regex parsers
@@ -363,6 +374,8 @@ def tune_xgb(X_train, y_train, X_val, y_val, n_trials=50):
             'early_stopping_rounds': 100,
             'eval_metric': 'rmse',
         }
+        if CUDA_AVAILABLE:
+            params.update({'tree_method': 'hist', 'device': 'cuda'})
         model = xgb.XGBRegressor(**params)
         model.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
         return root_mean_squared_error(y_val, model.predict(X_val))
@@ -388,6 +401,8 @@ def tune_lgb(X_train, y_train, X_val, y_val, n_trials=50):
             'reg_alpha': trial.suggest_float('reg_alpha', 1e-3, 10.0, log=True),
             'verbosity': -1,
         }
+        if CUDA_AVAILABLE:
+            params.update({'device': 'gpu'})
         model = lgb.LGBMRegressor(**params)
         model.fit(
             X_train, y_train,
@@ -416,6 +431,8 @@ def tune_cb(X_train, y_train, X_val, y_val, n_trials=50):
             'early_stopping_rounds': 50,
             'verbose': False,
         }
+        if CUDA_AVAILABLE:
+            params.update({'task_type': 'GPU'})
         model = cb.CatBoostRegressor(**params)
         model.fit(X_train, y_train, eval_set=(X_val, y_val))
         return root_mean_squared_error(y_val, model.predict(X_val))
@@ -435,13 +452,16 @@ def main():
                         help="Specify which models to train. 'all' trains all 4.")
     parser.add_argument("--tune", action="store_true",
                         help="Run Optuna hyperparameter tuning before training.")
-    parser.add_argument("--tune-trials", type=int, default=50,
-                        help="Number of Optuna trials per model (default: 50).")
+    parser.add_argument("--tune-trials", type=int, default=30,
+                        help="Number of Optuna trials per model (default: 30).")
     args = parser.parse_args()
     
     # Resolve 'all' target
     if "all" in args.models:
         train_targets = {"xgb", "lgb", "cb", "ydf"}
+        if CUDA_AVAILABLE:
+            print("CUDA detected and '--models all' requested. Skipping CPU-primarily models (ydf) to optimize for GPU runtime.")
+            train_targets.discard("ydf")
     else:
         train_targets = set(args.models)
     
@@ -504,6 +524,8 @@ def main():
             'early_stopping_rounds': 100,
             'eval_metric': 'rmse',
         }
+        if CUDA_AVAILABLE:
+            xgb_params.update({'tree_method': 'hist', 'device': 'cuda'})
         if args.tune:
             print(f"\n⏳ Tuning XGBoost ({args.tune_trials} trials)...")
             best = tune_xgb(X_train, y_train, X_val, y_val, n_trials=args.tune_trials)
@@ -536,6 +558,8 @@ def main():
             'reg_lambda': 9.0980,
             'reg_alpha': 0.0227,
         }
+        if CUDA_AVAILABLE:
+            lgb_params.update({'device': 'gpu'})
         if args.tune:
             print(f"\n⏳ Tuning LightGBM ({args.tune_trials} trials)...")
             best = tune_lgb(X_train, y_train, X_val, y_val, n_trials=args.tune_trials)
@@ -569,6 +593,8 @@ def main():
             'early_stopping_rounds': 100,
             'verbose': False,
         }
+        if CUDA_AVAILABLE:
+            cb_params.update({'task_type': 'GPU'})
         if args.tune:
             print(f"\n⏳ Tuning CatBoost ({args.tune_trials} trials)...")
             best = tune_cb(X_train, y_train, X_val, y_val, n_trials=args.tune_trials)
