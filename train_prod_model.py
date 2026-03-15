@@ -1,5 +1,6 @@
 import argparse
 import os
+import json
 import pandas as pd
 import numpy as np
 import xgboost as xgb
@@ -507,6 +508,7 @@ def main():
     print("\n--- Training Phase ---")
     models = {}
     predictions = {}
+    best_tuned_params = {}
 
     # --- XGBoost ---
     if "xgb" in train_targets:
@@ -530,6 +532,7 @@ def main():
             print(f"\n⏳ Tuning XGBoost ({args.tune_trials} trials)...")
             best = tune_xgb(X_train, y_train, X_val, y_val, n_trials=args.tune_trials)
             xgb_params.update(best)
+            best_tuned_params['xgb'] = best
             print(f"  ✅ XGBoost best params:")
             for k, v in best.items():
                 print(f"     {k}: {v:.4f}" if isinstance(v, float) else f"     {k}: {v}")
@@ -564,6 +567,7 @@ def main():
             print(f"\n⏳ Tuning LightGBM ({args.tune_trials} trials)...")
             best = tune_lgb(X_train, y_train, X_val, y_val, n_trials=args.tune_trials)
             lgb_params.update(best)
+            best_tuned_params['lgb'] = best
             print(f"  ✅ LightGBM best params:")
             for k, v in best.items():
                 print(f"     {k}: {v:.4f}" if isinstance(v, float) else f"     {k}: {v}")
@@ -599,6 +603,7 @@ def main():
             print(f"\n⏳ Tuning CatBoost ({args.tune_trials} trials)...")
             best = tune_cb(X_train, y_train, X_val, y_val, n_trials=args.tune_trials)
             cb_params.update(best)
+            best_tuned_params['cb'] = best
             print(f"  ✅ CatBoost best params:")
             for k, v in best.items():
                 print(f"     {k}: {v:.4f}" if isinstance(v, float) else f"     {k}: {v}")
@@ -698,6 +703,11 @@ def main():
             bucket_mae = np.mean(subset['abs_error'])
             bucket_rmse = np.sqrt(np.mean(subset['abs_error'] ** 2))
             print(f"  {name:10s}  n={len(subset):5d}  MAE={bucket_mae:.4f}  RMSE={bucket_rmse:.4f}")
+
+    if best_tuned_params:
+        with open("iv_prod_params.json", "w") as f:
+            json.dump(best_tuned_params, f, indent=4)
+        print(f"\n✅ Optimized parameters saved to iv_prod_params.json")
 
 if __name__ == "__main__":
     main()
