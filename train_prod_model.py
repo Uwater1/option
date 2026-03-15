@@ -77,7 +77,7 @@ def enrich_data(df):
             
             # Parse trade date for DTE calculation
             if 'lastTradeDate' in df.columns:
-                trade_date_utc = pd.to_datetime(df['lastTradeDate'], utc=True)
+                trade_date_utc = pd.to_datetime(df['lastTradeDate'], unit='s', utc=True)
 
                 # Options expire at 16:00 New York Time — localize correctly to handle DST
                 _ny_tz = pytz.timezone('America/New_York')
