@@ -81,10 +81,13 @@ def enrich_data(df):
                 # Most data has string dates like '2026-03-09 16:16:57+00:00'
                 # but some might have unix timestamps. Try both.
                 try:
-                    # Try numeric first if it looks like one, or just try to_datetime
-                     trade_date_utc = pd.to_datetime(df['lastTradeDate'], utc=True)
+                    # Specify format='ISO8601' for speed and to suppress warnings
+                    trade_date_utc = pd.to_datetime(df['lastTradeDate'], format='ISO8601', utc=True)
                 except:
-                     trade_date_utc = pd.to_datetime(df['lastTradeDate'], unit='s', utc=True)
+                    try:
+                        trade_date_utc = pd.to_datetime(df['lastTradeDate'], utc=True)
+                    except:
+                        trade_date_utc = pd.to_datetime(df['lastTradeDate'], unit='s', utc=True)
 
                 # Options expire at 16:00 New York Time — localize correctly to handle DST
                 _ny_tz = pytz.timezone('America/New_York')
