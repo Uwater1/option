@@ -7,3 +7,75 @@
      reg_lambda: 4.4372
      reg_alpha: 2.4430
      gamma: 0.0073
+
+⏳ Tuning LightGBM (30 trials)...
+Best trial: 2. Best value: 0.0380485: 100%|███████████████████████████████████████████████████████████████████████████| 30/30 [06:01<00:00, 12.06s/it]
+  ✅ LightGBM best params:
+     max_depth: 9
+     learning_rate: 0.1103
+     num_leaves: 48
+     min_child_samples: 26
+     subsample: 0.6821
+     colsample_bytree: 0.9073
+     reg_lambda: 0.6004
+     reg_alpha: 0.0080
+
+Training LightGBM...
+LightGBM saved to iv_prod_lgb.txt
+
+⏳ Tuning CatBoost (30 trials)...
+Best trial: 29. Best value: 0.0377955: 100%|██████████████████████████████████████████████████████████████████████████| 30/30 [26:21<00:00, 52.71s/it]
+  ✅ CatBoost best params:
+     depth: 9
+     learning_rate: 0.1410
+     l2_leaf_reg: 0.7608
+     subsample: 0.7361
+     colsample_bylevel: 0.5380
+     min_data_in_leaf: 15
+
+Training CatBoost...
+CatBoost saved to iv_prod_cb.cbm
+
+Training YDF (no tuner)...
+Train model on 163732 training examples and 40933 validation examples
+Model trained in 0:01:44.680770
+WARNING:absl:The directory 'iv_prod_ydf' to save the model to is not empty. This can lead to model corruption. To avoid this, specify an empty or non-existing directory, or use `advanced_options` to set a file prefix for the model.
+YDF saved to directory iv_prod_ydf
+
+=================================================================
+Model           | RMSE       | MAE        | R²         | Huber Loss
+-----------------------------------------------------------------
+xgb             | 2.1307     | 1.0903     | 0.9902     | 0.7331
+lgb             | 2.4253     | 1.2784     | 0.9873     | 0.9008
+cb              | 1.7876     | 0.7420     | 0.9931     | 0.4534
+ydf             | 1.8911     | 0.8762     | 0.9923     | 0.5537
+=================================================================
+
+=> Best Model based on RMSE is: cb
+
+--- Top 10 Worst Predictions (cb) ---
+ log_moneyness       days   vix  is_put  actual_IV  predicted_IV  abs_error
+     -0.677131  13.989919 13.64       0   141.5843     67.761814  73.822486
+     -0.318809  14.229144 36.98       0   141.7465     75.563712  66.182788
+     -0.065100   1.144502 31.50       0   137.1181     71.298859  65.819241
+      0.027718   2.041157 20.60       1    79.4743     26.754981  52.719319
+     -0.161415   3.991713 20.62       1   106.9243     60.878378  46.045922
+     -0.126084   2.202951 34.46       0   130.7211     85.026220  45.694880
+     -0.826230 101.241262 31.76       0   113.0067     67.738013  45.268687
+      0.178935   3.077731 35.57       1    84.4917    128.081975  43.590275
+     -0.097830   3.015405 23.41       0   110.7723     73.344386  37.427914
+     -2.903325 324.161563 27.43       1   107.2463     70.989353  36.256947
+
+--- Error by Moneyness Bucket (cb) ---
+  Deep ITM    n= 1143  MAE=2.2755  RMSE=5.6054
+  ITM         n= 4652  MAE=1.2610  RMSE=2.8864
+  ATM         n= 9106  MAE=0.5829  RMSE=1.1477
+  OTM         n=14514  MAE=0.5763  RMSE=1.0207
+  Deep OTM    n=11518  MAE=0.7149  RMSE=1.5870
+
+--- Error by DTE Bucket (cb) ---
+  <15d        n=10732  MAE=1.3672  RMSE=3.0138
+  15-40d      n= 9742  MAE=0.6846  RMSE=1.2894
+  >40d        n=20459  MAE=0.4415  RMSE=0.9148
+
+✅ Optimized parameters saved to iv_prod_params.json

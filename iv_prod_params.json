@@ -1,0 +1,30 @@
+{
+    "xgb": {
+        "max_depth": 4,
+        "learning_rate": 0.1014272999562229,
+        "min_child_weight": 4,
+        "subsample": 0.7522564272338194,
+        "colsample_bytree": 0.7808757380557458,
+        "reg_lambda": 0.13985948188728492,
+        "reg_alpha": 0.005967431807454278,
+        "gamma": 0.009516890815191404
+    },
+    "lgb": {
+        "max_depth": 9,
+        "learning_rate": 0.11031190702483601,
+        "num_leaves": 48,
+        "min_child_samples": 26,
+        "subsample": 0.6820546702740715,
+        "colsample_bytree": 0.9072577093975787,
+        "reg_lambda": 0.6003989794418817,
+        "reg_alpha": 0.008021605799098034
+    },
+    "cb": {
+        "depth": 9,
+        "learning_rate": 0.14104432978401393,
+        "l2_leaf_reg": 0.7608368710972685,
+        "subsample": 0.7361366616191177,
+        "colsample_bylevel": 0.5379615093846292,
+        "min_data_in_leaf": 15
+    }
+}
