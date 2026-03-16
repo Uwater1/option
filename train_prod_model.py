@@ -11,6 +11,7 @@ from datetime import datetime
 import pytz
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 import optuna
+import numba as nb
 import ydf
 import lightgbm as lgb
 import catboost as cb
@@ -74,7 +75,7 @@ def enrich_data(df):
             df['expiry_dt'] = pd.to_datetime(df['expiry_str'], format='%y%m%d', errors='coerce')
             
             # Parse type
-            df['is_put'] = (df['type_str'] == 'P').astype(int)
+            df['is_put'] = (df['type_str'] == 'P').astype(np.int8)
             
             # Parse trade date for DTE calculation
             if 'lastTradeDate' in df.columns:
@@ -90,17 +91,9 @@ def enrich_data(df):
                         trade_date_utc = pd.to_datetime(df['lastTradeDate'], unit='s', utc=True)
 
                 # Options expire at 16:00 New York Time — localize correctly to handle DST
-                _ny_tz = pytz.timezone('America/New_York')
-
-                def _localize_expiry(naive_dt):
-                    if pd.isna(naive_dt):
-                        return pd.NaT
-                    dt = naive_dt.replace(hour=16, minute=0, second=0, microsecond=0)
-                    return pd.Timestamp(
-                        _ny_tz.localize(dt.to_pydatetime()).astimezone(pytz.utc)
-                    )
-
-                expiry_utc = df['expiry_dt'].apply(_localize_expiry)
+                # Vectorized timezone localization to avoid slow .apply() loop
+                expiry_ny = df['expiry_dt'] + pd.Timedelta(hours=16)
+                expiry_utc = expiry_ny.dt.tz_localize('America/New_York', nonexistent='shift_forward', ambiguous='NaT').dt.tz_convert('UTC')
 
                 # Use fractional days (via total_seconds) to preserve intra-day precision
                 df['daysToExpiration'] = (
@@ -112,6 +105,74 @@ def enrich_data(df):
         df['volatilityIndex'] = pd.to_numeric(df['volatilityIndex'], errors='coerce')
             
     return df
+
+
+@nb.njit(fastmath=True)
+def _numba_irls_huber(X, y, m, t, max_iter, c, min_abs_dev, base_threshold, l2_penalty):
+    n_samples = X.shape[0]
+    n_features = X.shape[1]
+    
+    # Initial weights inversely prop to moneyness dist
+    w = np.exp(-2.0 * np.abs(m))
+    beta = np.zeros(n_features)
+    
+    I_reg = np.eye(n_features)
+    I_reg[0, 0] = 0.0  # Do not regularize intercept
+    
+    for _ in range(max_iter):
+        # Xt \cdot W \cdot X
+        XtW = np.dot(X.T, np.diag(w))
+        
+        try:
+            # We explicitly compute the matrices inside the solver
+            A = np.dot(XtW, X) + l2_penalty * I_reg
+            B = np.dot(XtW, y)
+            beta_new = np.linalg.solve(A, B)
+        except:
+            # SVD or solve failed (singular matrix)
+            # return empty beta to signify failure
+            return np.zeros(0), np.zeros(0), np.zeros(0)
+            
+        # Check convergence
+        diff = np.abs(beta_new - beta)
+        max_diff = 0.0
+        for i in range(len(diff)):
+            if diff[i] > max_diff:
+                max_diff = diff[i]
+                
+        if max_diff < 1e-6:
+            beta = beta_new
+            break
+        beta = beta_new
+        
+        residuals = y - np.dot(X, beta)
+        
+        # Calculate MAD
+        abs_res = np.abs(residuals)
+        mad = np.median(abs_res)
+        mad_scale = 1.4826 * mad if mad > 1e-10 else 1.0
+        
+        r = residuals / mad_scale
+        
+        # Huber weights
+        abs_r = np.abs(r)
+        
+        for i in range(n_samples):
+            if abs_r[i] < c:
+                w[i] = 1.0
+            else:
+                w[i] = c / max(abs_r[i], 1e-10)
+                
+    # Final standardized residuals for outlier detection
+    final_residuals = y - np.dot(X, beta)
+    
+    abs_final = np.abs(final_residuals)
+    mad = np.median(abs_final)
+    mad_scale = 1.4826 * mad if mad > 1e-10 else 1.0
+    
+    std_residuals = abs_final / mad_scale
+    
+    return beta, final_residuals, std_residuals
 
 
 def filter_arbitrage_irls(df: pd.DataFrame) -> pd.DataFrame:
@@ -147,7 +208,7 @@ def filter_arbitrage_irls(df: pd.DataFrame) -> pd.DataFrame:
     t = np.sqrt(work['daysToExpiration']).values
     y = work['impliedVolatility'].values
 
-    X = np.column_stack([
+    X = np.column_stack((
         np.ones(len(m)),   # β₀ intercept
         m,                  # β₁ skew
         m ** 2,             # β₂ smile
@@ -155,42 +216,20 @@ def filter_arbitrage_irls(df: pd.DataFrame) -> pd.DataFrame:
         t ** 2,             # β₄ term curvature
         m * t,              # β₅ skew × term
         m ** 2 * t,         # β₆ smile × term
-    ])
+    ))
 
-    # ── IRLS with Huber weights ──────────────────────────────────────────────
-    w = np.exp(-2.0 * np.abs(m))  # initial weights inversely prop to moneyness dist
-    beta = np.zeros(X.shape[1])
+    # ── IRLS with Huber weights (Numba Compiled) ──────────────────────────────
+    beta, final_residuals, std_residuals = _numba_irls_huber(
+        X, y, m, t, 
+        max_iter=IRLS_MAX_ITER, 
+        c=IRLS_C, 
+        min_abs_dev=IRLS_MIN_ABS_DEV, 
+        base_threshold=IRLS_BASE_THRESHOLD, 
+        l2_penalty=IRLS_L2_PENALTY
+    )
     
-    I_reg = np.eye(X.shape[1])
-    I_reg[0, 0] = 0  # Do not regularize intercept
-
-    for _ in range(IRLS_MAX_ITER):
-        W = np.diag(w)
-        XtW = X.T @ W
-        try:
-            beta_new = np.linalg.solve(XtW @ X + IRLS_L2_PENALTY * I_reg, XtW @ y)
-        except np.linalg.LinAlgError:
-            return df  # singular matrix — skip filter
-
-        if np.max(np.abs(beta_new - beta)) < 1e-6:
-            beta = beta_new
-            break
-        beta = beta_new
-
-        residuals = y - X @ beta
-        mad = np.median(np.abs(residuals))
-        mad_scale = 1.4826 * mad if mad > 1e-10 else 1.0  # robust sigma
-        r = residuals / mad_scale
-
-        # Huber weights: w = min(1, IRLS_C / |r|)
-        abs_r = np.abs(r)
-        w = np.where(abs_r < IRLS_C, 1.0, IRLS_C / np.maximum(abs_r, 1e-10))
-
-    # ── Final standardized residuals for outlier detection ───────────────────
-    final_residuals = y - X @ beta
-    mad = np.median(np.abs(final_residuals))
-    mad_scale = 1.4826 * mad if mad > 1e-10 else 1.0
-    std_residuals = np.abs(final_residuals) / mad_scale
+    if len(beta) == 0:
+        return df # Singular matrix - skip filter
 
     # ── Map results back to original df index ────────────────────────────────
     # Dynamic threshold: relax for deep OTM/ITM and ultra-short DTE
@@ -219,6 +258,12 @@ def prepare_features(df):
         df[c] = pd.to_numeric(df[c], errors='coerce')
     
     df = df.dropna(subset=cols)
+    
+    # Downcast floats and ints to save memory on the concatenated dataset
+    float_cols = ['strike', 'underlying', 'days', 'vix']
+    df[float_cols] = df[float_cols].astype(np.float32)
+    df['is_put'] = df['is_put'].astype(np.int8)
+    
     df = df[df['days'] >= 1.1]
     
     df['net_moneyness'] = df['strike'] / df['underlying']
@@ -240,16 +285,16 @@ def prepare_features(df):
     
     # 5-Bucket Moneyness
     threshold = df['vix'] * 0.004 + df['sqrt_dte'] * 0.001
-    df['is_atm'] = (np.abs(df['otm_amount']) <= 0.02).astype(int)
-    df['is_otm'] = ((df['otm_amount'] > 0.02) & (df['otm_amount'] <= threshold)).astype(int)
-    df['is_deep_otm'] = (df['otm_amount'] > threshold).astype(int)
-    df['is_itm'] = ((df['otm_amount'] < -0.02) & (df['otm_amount'] > -threshold)).astype(int)
-    df['is_deep_itm'] = (df['otm_amount'] <= -threshold).astype(int)
+    df['is_atm'] = (np.abs(df['otm_amount']) <= 0.02).astype(np.int8)
+    df['is_otm'] = ((df['otm_amount'] > 0.02) & (df['otm_amount'] <= threshold)).astype(np.int8)
+    df['is_deep_otm'] = (df['otm_amount'] > threshold).astype(np.int8)
+    df['is_itm'] = ((df['otm_amount'] < -0.02) & (df['otm_amount'] > -threshold)).astype(np.int8)
+    df['is_deep_itm'] = (df['otm_amount'] <= -threshold).astype(np.int8)
     
     # Bucketed DTE
-    df['dte_under_15'] = (df['days'] < 15).astype(int)
-    df['dte_15_to_40'] = ((df['days'] >= 15) & (df['days'] <= 40)).astype(int)
-    df['dte_over_40'] = (df['days'] > 40).astype(int)
+    df['dte_under_15'] = (df['days'] < 15).astype(np.int8)
+    df['dte_15_to_40'] = ((df['days'] >= 15) & (df['days'] <= 40)).astype(np.int8)
+    df['dte_over_40'] = (df['days'] > 40).astype(np.int8)
     
     # ATM IV proxy from VIX (matches pricing.py)
     df['atm_iv_proxy'] = df['vix'] / 100.0
@@ -296,11 +341,16 @@ def process_file(f):
 
         # ── Asset-class features derived from filename ticker ────────────────
         ticker = _ticker_from_filename(f)
-        df['is_commodity'] = int(ticker in COMMODITY_TICKERS)
-        df['is_stock']     = int(ticker in STOCK_TICKERS)
-        df['is_index']     = int(ticker in INDEX_TICKERS)
+        
+        assign_dict = {
+            'is_commodity': np.int8(ticker in COMMODITY_TICKERS),
+            'is_stock': np.int8(ticker in STOCK_TICKERS),
+            'is_index': np.int8(ticker in INDEX_TICKERS)
+        }
         for t in KNOWN_TICKERS:
-            df[f'ticker_{t}'] = int(ticker == t)
+            assign_dict[f'ticker_{t}'] = np.int8(ticker == t)
+            
+        df = df.assign(**assign_dict)
         # ────────────────────────────────────────────────────────────────────
 
         # Basic filtering
@@ -375,7 +425,7 @@ def huber_loss(y_true, y_pred, delta=1.0):
 
 # ── Optuna Tuning Functions ──────────────────────────────────────────────────
 
-def tune_xgb(X_train, y_train, X_val, y_val, n_trials=50):
+def tune_xgb(X_train, y_train, X_val, y_val, n_trials=30):
     """Tune XGBoost hyperparameters via Optuna."""
     def objective(trial):
         params = {
@@ -413,7 +463,7 @@ def tune_xgb(X_train, y_train, X_val, y_val, n_trials=50):
     return study.best_params
 
 
-def tune_lgb(X_train, y_train, X_val, y_val, n_trials=50):
+def tune_lgb(X_train, y_train, X_val, y_val, n_trials=30):
     """Tune LightGBM hyperparameters via Optuna."""
     def objective(trial):
         params = {
@@ -445,7 +495,7 @@ def tune_lgb(X_train, y_train, X_val, y_val, n_trials=50):
     return study.best_params
 
 
-def tune_cb(X_train, y_train, X_val, y_val, n_trials=50):
+def tune_cb(X_train, y_train, X_val, y_val, n_trials=30):
     """Tune CatBoost hyperparameters via Optuna."""
     def objective(trial):
         params = {
