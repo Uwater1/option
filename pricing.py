@@ -9,7 +9,12 @@ import math
 from numba import jit, vectorize, float64
 
 # --- CONFIGURATION ---
-MODEL_FILE = "iv_prod_xgb.json"
+MODEL_FILES = {
+    "cb": "iv_prod_cb.cbm",
+    "xgb": "iv_prod_xgb.json",
+    "lgb": "iv_prod_lgb.txt",
+    "ydf": "iv_prod_ydf"
+}
 DEFAULT_RATE = 0.0364
 
 COMMODITY_TICKERS = {"gold", "silver", "longterm"}
@@ -35,6 +40,41 @@ def resolve_asset_class(token: str):
     if t in COMMODITY_TICKERS: return 0, 0, 1
     # Do not print warning here, handle in main
     return 0, 0, 0
+
+def load_model(model_type):
+    file_path = MODEL_FILES.get(model_type)
+    if not file_path or not os.path.exists(file_path):
+        raise FileNotFoundError(f"Model file for '{model_type}' not found at {file_path}")
+
+    if model_type == "cb":
+        import catboost as cb
+        model = cb.CatBoostRegressor()
+        model.load_model(file_path)
+        return model
+    elif model_type == "xgb":
+        import xgboost as xgb
+        model = xgb.XGBRegressor()
+        model.load_model(file_path)
+        return model
+    elif model_type == "lgb":
+        import lightgbm as lgb
+        return lgb.Booster(model_file=file_path)
+    elif model_type == "ydf":
+        import ydf
+        return ydf.load_model(file_path)
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
+
+def get_feature_names(model, model_type):
+    if model_type == "cb":
+        return model.feature_names_
+    elif model_type == "xgb":
+        return model.get_booster().feature_names
+    elif model_type == "lgb":
+        return model.feature_name()
+    elif model_type == "ydf":
+        return [f.name for f in model.input_features()]
+    return []
 
 
 # --- NUMBA FUNCTIONS ---
@@ -154,22 +194,22 @@ def main():
     parser.add_argument("vix", type=float, help="Volatility Index")
     parser.add_argument("rate", type=float, nargs='?', default=DEFAULT_RATE, help="Risk-free rate (default: 0.0364)")
     parser.add_argument("-t", type=str, default="", help="Specific ticker (aapl, gold, sp500...)")
+    parser.add_argument("-m", "--model", type=str, default="cb", choices=["cb", "xgb", "lgb", "ydf"], help="Model to use (default: cb)")
     
     args = parser.parse_args()
     
-    if not os.path.exists(MODEL_FILE):
-        print(f"Error: Model file '{MODEL_FILE}' not found.")
-        print("Please ask the developer to train the production model first.")
+    try:
+        model = load_model(args.model)
+    except Exception as e:
+        print(f"Error loading model: {e}")
         return
 
-    # Load Model
-    model = xgb.XGBRegressor()
-    model.load_model(MODEL_FILE)
+    feature_names = get_feature_names(model, args.model)
     
     # Pricing both Call and Put
     types = ["call", "put"]
     
-    print(f"\nUnderlying: {args.underlying} | Strike: {args.strike} | Days: {args.days} | VIX: {args.vix} | Rate: {args.rate}")
+    print(f"\nUnderlying: {args.underlying} | Strike: {args.strike} | Days: {args.days} | VIX: {args.vix} | Rate: {args.rate} | Model: {args.model}")
     print("-" * 65)
     print(f"{'Type':<6} {'Price':<10} {'IV':<8} {'Delta':<8} {'Gamma':<8} {'Vega':<8} {'Theta':<8}")
     print("-" * 65)
@@ -200,7 +240,8 @@ def main():
         
         X = prepare_features(df)
         # Reorder columns to exactly match what the model was trained on
-        X = X[model.get_booster().feature_names]
+        X = X[feature_names]
+        
         predicted_iv_log = model.predict(X)[0]
         predicted_iv = np.exp(predicted_iv_log)
         

@@ -36,26 +36,27 @@ Predicts IV, Price, and Greeks (Delta, Gamma, Vega, Theta, Rho) for a single str
 
 **Syntax:**
 ```bash
-python pricing.py <underlying> <strike> <days> <vix> [rate] [-t ticker]
+python pricing.py <underlying> <strike> <days> <vix> [rate] [-t ticker] [-m model]
 ```
 
 **Example:**
 ```bash
-python pricing.py 500 505 30 18.5 -t sp500
+python pricing.py 500 505 30 18.5 -t sp500 -m cb
 ```
 
 ### 3. Pricing an Option Chain (`pricing-form.py`)
-Generates a beautiful console-rendered option chain (10 strikes above/below ATM) with IV skew and Greeks for both Calls and Puts.
+Generates a beautiful console-rendered option chain (16 strikes above/below ATM) with IV skew and Greeks for both Calls and Puts.
 
 **Syntax:**
 ```bash
-python pricing-form.py <underlying> <days> <vix> [rate] [-t ticker]
+python pricing-form.py <underlying> <days> <vix> [rate] [-t ticker] [-m model]
 ```
 
 **Example:**
 ```bash
-python pricing-form.py 150.5 45 22.1 -t aapl
+python pricing-form.py 150.5 45 22.1 -t aapl -m xgb
 ```
 
 ---
 **Note:** Supported tickers for the `-t` flag include: `gold`, `silver`, `longterm`, `aapl`, `amzn`, `goog`, `sp500`, `nq100`, `dowjones`. Use `stock`, `index`, or `commodity` for general asset class defaults.
+Supported models for the `-m` flag include: `cb` (CatBoost, default), `xgb` (XGBoost), `lgb` (LightGBM), `ydf` (YDF).

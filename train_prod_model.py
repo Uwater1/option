@@ -96,14 +96,15 @@ def enrich_data(df):
                 expiry_utc = expiry_ny.dt.tz_localize('America/New_York', nonexistent='shift_forward', ambiguous='NaT').dt.tz_convert('UTC')
 
                 # Use fractional days (via total_seconds) to preserve intra-day precision
+                # fp32 has ~7 sig-figs, which is more than enough for DTE (max ~730 days)
                 df['daysToExpiration'] = (
                     (expiry_utc - trade_date_utc).dt.total_seconds() / 86400.0
-                )
+                ).astype(np.float32)
     
-    # Standardize volatilityIndex column name
+    # Standardize volatilityIndex column name; cast to fp32 early to save memory
     if 'volatilityIndex' in df.columns:
-        df['volatilityIndex'] = pd.to_numeric(df['volatilityIndex'], errors='coerce')
-            
+        df['volatilityIndex'] = pd.to_numeric(df['volatilityIndex'], errors='coerce').astype(np.float32)
+
     return df
 
 
@@ -376,6 +377,18 @@ def process_file(f):
 
         df = df.dropna(subset=required)
 
+        # ── Downcast numeric payload columns to fp32 before appending ────────
+        # All these values are well within float32 range (strikePrice, underlying
+        # price, DTE, IV, VIX).  Halves per-chunk memory before pd.concat.
+        fp32_cols = ['strikePrice', 'underlyingPriceAtTrade', 'impliedVolatility']
+        if 'lastPrice' in df.columns:
+            fp32_cols.append('lastPrice')
+        for col in fp32_cols:
+            if col in df.columns:
+                df[col] = df[col].astype(np.float32)
+        # daysToExpiration & volatilityIndex already cast in enrich_data()
+        # ─────────────────────────────────────────────────────────────────────
+
         if len(df) > 0:
             return df
     except Exception as e:
@@ -594,14 +607,14 @@ def main():
         xgb_params = {
             'objective': 'reg:squarederror',
             'n_estimators': 2000,
-            'max_depth': 8,
-            'learning_rate': 0.0104,
-            'min_child_weight': 3,
-            'subsample': 0.6724,
-            'colsample_bytree': 0.6631,
-            'reg_lambda': 4.4372,
-            'reg_alpha': 2.4430,
-            'gamma': 0.0073,
+            'max_depth': 10,
+            'learning_rate': 0.2975,
+            'min_child_weight': 5,
+            'subsample': 0.7482,
+            'colsample_bytree': 0.5008,
+            'reg_lambda': 1.4560,
+            'reg_alpha': 0.0012,
+            'gamma': 0.0049,
             'early_stopping_rounds': 100,
             'eval_metric': 'rmse',
         }
@@ -634,14 +647,14 @@ def main():
     # --- LightGBM ---
     if "lgb" in train_targets:
         lgb_params = {
-            'max_depth': 10,
-            'learning_rate': 0.0495,
-            'num_leaves': 163,
-            'min_child_samples': 11,
-            'subsample': 0.7260,
-            'colsample_bytree': 0.5424,
-            'reg_lambda': 9.0980,
-            'reg_alpha': 0.0227,
+            'max_depth': 9,
+            'learning_rate': 0.1103,
+            'num_leaves': 48,
+            'min_child_samples': 26,
+            'subsample': 0.6821,
+            'colsample_bytree': 0.9073,
+            'reg_lambda': 0.6004,
+            'reg_alpha': 0.0080,
         }
         if CUDA_AVAILABLE:
             lgb_params.update({'device': 'gpu'})
@@ -670,12 +683,12 @@ def main():
     if "cb" in train_targets:
         cb_params = {
             'iterations': 2000,
-            'depth': 8,
-            'learning_rate': 0.2468,
-            'l2_leaf_reg': 2.3247,
-            'subsample': 0.7155,
-            'colsample_bylevel': 0.9375,
-            'min_data_in_leaf': 50,
+            'depth': 9,
+            'learning_rate': 0.1410,
+            'l2_leaf_reg': 0.7608,
+            'subsample': 0.7361,
+            'colsample_bylevel': 0.5380,
+            'min_data_in_leaf': 15,
             'early_stopping_rounds': 100,
             'verbose': False,
             'allow_writing_files': False,
