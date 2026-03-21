@@ -30,7 +30,8 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv pip install --system pandas yfinance numpy scipy fastparquet
+        run: uv pip install --system pandas yfinance numpy scipy fastparquet --break-system-packages
+
 
 
       - name: Run options download script
