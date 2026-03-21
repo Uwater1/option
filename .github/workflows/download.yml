@@ -24,8 +24,14 @@ jobs:
             download_options.py
             options_data/
 
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
       - name: Install dependencies
-        run: pip install pandas yfinance numpy scipy fastparquet
+        run: uv pip install --system pandas yfinance numpy scipy fastparquet
+
 
       - name: Run options download script
         id: download
