@@ -1,9 +1,9 @@
 name: Download Spread 11:10 NY
 
 on:
-  schedule:
+#  schedule:
     # Summer/Spring/Early Autumn
-    - cron: '10 14 * * 1-5'
+#    - cron: '10 14 * * 1-5'
   workflow_dispatch:
 
 permissions:
