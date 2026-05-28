@@ -282,9 +282,10 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
         if col in df.columns:
             df[col] = df[col].astype(np.float32)
 
-    # 5. Dict encoding for contractSymbol
-    if 'contractSymbol' in df.columns:
-        df['contractSymbol'] = df['contractSymbol'].astype('category')
+    # 5. Dict encoding for contractSymbol and optionType
+    for col in ['contractSymbol', 'optionType']:
+        if col in df.columns:
+            df[col] = df[col].astype('category')
 
     # 6. Add underlying price at lastTradeDate (using cached intraday data)
     if 'lastTradeDate' in df.columns:
