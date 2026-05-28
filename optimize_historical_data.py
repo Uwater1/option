@@ -27,7 +27,9 @@ def optimize_dataframe(df):
     ]
     for col in num_cols:
         if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors='coerce').astype(np.float32)
+            if not pd.api.types.is_numeric_dtype(df[col]):
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+            df[col] = df[col].astype(np.float32)
 
     float_cols = df.select_dtypes(include=['float64']).columns
     df[float_cols] = df[float_cols].astype(np.float32)
