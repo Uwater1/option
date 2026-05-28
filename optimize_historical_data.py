@@ -53,8 +53,15 @@ def migrate_folder(input_dir):
             # Optimize
             df = optimize_dataframe(df)
 
-            # Save back with zstd compression
-            df.to_parquet(parquet_path, index=False, compression='zstd')
+            # Save back with zstd compression safely using a temporary file
+            temp_path = parquet_path.with_suffix('.tmp')
+            try:
+                df.to_parquet(temp_path, index=False, compression='zstd')
+                temp_path.replace(parquet_path)
+            except Exception as e:
+                if temp_path.exists():
+                    temp_path.unlink()
+                raise e
 
             success_count += 1
             if i % 100 == 0:
