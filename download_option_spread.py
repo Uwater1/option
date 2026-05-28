@@ -120,10 +120,15 @@ def download_expiration(tk, ticker_symbol, date, current_price, vol_current_pric
             'underlyingPriceAtTrade', 'volatilityIndex','bid','ask', 'bid_ask_spread', 'days_to_expire', 'optionType'
         ]
         
-        float_cols = ['strike', 'lastPrice', 'underlyingPriceAtTrade', 'volatilityIndex','bid','ask','bid_ask_spread', 'days_to_expire']
+        float_cols = ['strike', 'lastPrice', 'underlyingPriceAtTrade', 'volatilityIndex','bid','ask','bid_ask_spread', 'days_to_expire', 'volume', 'openInterest']
         for col in float_cols:
             if col in df.columns:
-                df[col] = df[col].round(3)
+                df[col] = df[col].astype(np.float32)
+
+        if 'contractSymbol' in df.columns:
+            df['contractSymbol'] = df['contractSymbol'].astype('category')
+        if 'optionType' in df.columns:
+            df['optionType'] = df['optionType'].astype('category')
                 
         available_cols = [c for c in required_cols if c in df.columns]
         return df[available_cols]
@@ -194,7 +199,15 @@ def main():
                 underlying_price_str = f"{current_price:.2f}".replace(".", "_")
                 underlying_vix_str = f"{vol_current_price:.2f}".replace(".", "_")
                 file_path = os.path.join(spread_folder, f"{ticker_symbol}_{current_date}-{underlying_price_str}-{underlying_vix_str}.parquet")
-                final_ticker_df.to_parquet(file_path, index=False)
+
+                # Ensure category dtypes are preserved and final float32 cast
+                for col in ['contractSymbol', 'optionType']:
+                    if col in final_ticker_df.columns:
+                        final_ticker_df[col] = final_ticker_df[col].astype('category')
+                float_cols = final_ticker_df.select_dtypes(include=['float64']).columns
+                final_ticker_df[float_cols] = final_ticker_df[float_cols].astype('float32')
+
+                final_ticker_df.to_parquet(file_path, index=False, compression='zstd')
                 print(f"Successfully saved {ticker_symbol} spread data to {file_path}")
             
         except Exception as e:

@@ -21,6 +21,8 @@ yfinance
 # Data Formats (Parquet)
 pyarrow
 fastparquet
+zstandard
+brotli
 
 # Visualization
 matplotlib
