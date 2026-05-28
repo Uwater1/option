@@ -74,10 +74,10 @@ def download_expiration(tk, ticker_symbol, date, current_price, vol_current_pric
             
         if 'lastTradeDate' in df.columns:
             df['lastTradeDate'] = pd.to_datetime(df['lastTradeDate'], utc=True)
+            df = df.sort_values('lastTradeDate')
             
             # Vectorized price lookup using merge_asof for underlyingPriceAtTrade
             if not ticker_hist.empty:
-                df = df.sort_values('lastTradeDate')
                 df = pd.merge_asof(
                     df, 
                     ticker_hist[['Close']].rename(columns={'Close': 'underlyingPriceAtTrade'}),
@@ -146,6 +146,10 @@ def main():
     now_ny = datetime.now(ny_tz)
     current_date = (now_ny + timedelta(minutes=10)).strftime("%Y%m%d_%H")
     
+    date_hour_folder = os.path.join(spread_folder, current_date)
+    if not os.path.exists(date_hour_folder):
+        os.makedirs(date_hour_folder)
+
     start_time = time.time()
     MAX_DURATION_SECONDS = 10 * 60 
     
@@ -198,13 +202,15 @@ def main():
                 final_ticker_df = pd.concat(all_spreads_for_ticker, ignore_index=True)
                 underlying_price_str = f"{current_price:.2f}".replace(".", "_")
                 underlying_vix_str = f"{vol_current_price:.2f}".replace(".", "_")
-                file_path = os.path.join(spread_folder, f"{ticker_symbol}_{current_date}-{underlying_price_str}-{underlying_vix_str}.parquet")
+                file_path = os.path.join(date_hour_folder, f"{ticker_symbol}_{current_date}-{underlying_price_str}-{underlying_vix_str}.parquet")
 
                 # Ensure category dtypes are preserved and final float32 cast
                 for col in ['contractSymbol', 'optionType']:
                     if col in final_ticker_df.columns:
                         final_ticker_df[col] = final_ticker_df[col].astype('category')
-                float_cols = final_ticker_df.select_dtypes(include=['float64']).columns
+
+                # Final cast for all float columns to float32
+                float_cols = final_ticker_df.select_dtypes(include=['float64', 'float32']).columns
                 final_ticker_df[float_cols] = final_ticker_df[float_cols].astype('float32')
 
                 final_ticker_df.to_parquet(file_path, index=False, compression='zstd')
