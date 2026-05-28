@@ -293,44 +293,67 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
         df = df.sort_values('lastTradeDate')
 
         # Pre-fetch all unique trade dates for this ticker to ensure we have historical intraday data
-        unique_dates = df['lastTradeDate'].dt.strftime('%Y-%m-%d').unique()
+        unique_dates = df['lastTradeDate'].dropna().dt.strftime('%Y-%m-%d').unique()
 
         # Merge intraday data for all relevant dates
         ticker_hist_list = []
         vol_hist_list = []
 
         for d in unique_dates:
-            ticker_hist_list.append(_get_intraday_data(ticker_symbol, d))
+            try:
+                ticker_df = _get_intraday_data(ticker_symbol, d)
+                if ticker_df is not None and not ticker_df.empty:
+                    ticker_hist_list.append(ticker_df)
+            except Exception:
+                pass
             if vol_index_symbol:
-                vol_hist_list.append(_get_intraday_data(vol_index_symbol, d))
+                try:
+                    vol_df = _get_intraday_data(vol_index_symbol, d)
+                    if vol_df is not None and not vol_df.empty:
+                        vol_hist_list.append(vol_df)
+                except Exception:
+                    pass
 
         ticker_hist = pd.concat(ticker_hist_list).sort_index() if ticker_hist_list else pd.DataFrame()
         vol_hist = pd.concat(vol_hist_list).sort_index() if vol_hist_list else pd.DataFrame()
 
+        # Split into rows with and without trade dates to avoid merge_asof issues with NaT
+        df_with_date = df[df['lastTradeDate'].notna()].copy()
+        df_no_date = df[df['lastTradeDate'].isna()].copy()
+
         # Underlying price lookup
-        if not ticker_hist.empty:
-            df = pd.merge_asof(
-                df,
+        if not ticker_hist.empty and not df_with_date.empty:
+            df_with_date = pd.merge_asof(
+                df_with_date,
                 ticker_hist[['Close']].rename(columns={'Close': 'underlyingPriceAtTrade'}),
                 left_on='lastTradeDate',
                 right_index=True,
                 direction='nearest'
             )
         else:
-            df['underlyingPriceAtTrade'] = np.float32(current_price)
+            df_with_date['underlyingPriceAtTrade'] = np.float32(current_price)
+
+        if not df_no_date.empty:
+            df_no_date['underlyingPriceAtTrade'] = np.float32(current_price)
 
         # Volatility index lookup
         if vol_index_symbol:
-            if not vol_hist.empty:
-                df = pd.merge_asof(
-                    df,
+            if not vol_hist.empty and not df_with_date.empty:
+                df_with_date = pd.merge_asof(
+                    df_with_date,
                     vol_hist[['Close']].rename(columns={'Close': 'volatilityIndex'}),
                     left_on='lastTradeDate',
                     right_index=True,
                     direction='nearest'
                 )
             else:
-                df['volatilityIndex'] = np.float32(np.nan)
+                df_with_date['volatilityIndex'] = np.float32(np.nan)
+
+            if not df_no_date.empty:
+                df_no_date['volatilityIndex'] = np.float32(np.nan)
+
+        # Recombine
+        df = pd.concat([df_with_date, df_no_date]).sort_values('lastTradeDate')
 
     # 7. Calculate Black-Scholes IV using custom risk-free rate (vectorized)
     exp_dt = pd.to_datetime(expiration_date).tz_localize('UTC')
