@@ -277,12 +277,16 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
         df['inTheMoney'] = df['inTheMoney'].astype(np.int8)
 
     # 4. Convert price columns to float32
-    price_cols = ['lastPrice', 'strike', 'volume']
+    price_cols = ['lastPrice', 'strike', 'volume', 'bid', 'ask', 'openInterest']
     for col in price_cols:
         if col in df.columns:
             df[col] = df[col].astype(np.float32)
 
-    # 5. Add underlying price at lastTradeDate (using cached intraday data)
+    # 5. Dict encoding for contractSymbol
+    if 'contractSymbol' in df.columns:
+        df['contractSymbol'] = df['contractSymbol'].astype('category')
+
+    # 6. Add underlying price at lastTradeDate (using cached intraday data)
     if 'lastTradeDate' in df.columns:
         # Pre-fetch all unique trade dates for this ticker (one API call per date)
         unique_dates = df['lastTradeDate'].dropna().apply(
@@ -345,6 +349,14 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
             vol_hist = vol_tk.history(period="1d")
             vol_val = vol_hist['Close'].iloc[-1] if not vol_hist.empty else np.nan
             df['volatilityIndex'] = np.float32(vol_val)
+
+    # 9. Final dtype optimization and compression prep
+    if 'lastTradeDate' in df.columns:
+        df['lastTradeDate'] = pd.to_datetime(df['lastTradeDate'], utc=True).dt.tz_localize(None)
+
+    # Ensure all float columns are float32
+    float_cols = df.select_dtypes(include=['float64']).columns
+    df[float_cols] = df[float_cols].astype(np.float32)
 
     return df
 
@@ -409,7 +421,7 @@ if __name__ == "__main__":
                             chain.calls.copy(), ticker_symbol, current_price, 
                             risk_free_rate, date, 'call', vol_symbol
                         )
-                        cleaned_calls.to_parquet(calls_file, index=False)
+                        cleaned_calls.to_parquet(calls_file, index=False, compression='zstd')
                         print(f"  Saved {len(cleaned_calls)} calls to {os.path.basename(calls_file)}")
 
                     # Process and Save Puts
@@ -418,7 +430,7 @@ if __name__ == "__main__":
                             chain.puts.copy(), ticker_symbol, current_price, 
                             risk_free_rate, date, 'put', vol_symbol
                         )
-                        cleaned_puts.to_parquet(puts_file, index=False)
+                        cleaned_puts.to_parquet(puts_file, index=False, compression='zstd')
                         print(f"  Saved {len(cleaned_puts)} puts to {os.path.basename(puts_file)}")
 
                     # Sleep to prevent rate limiting

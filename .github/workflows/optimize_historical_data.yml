@@ -1,0 +1,28 @@
+name: Optimize Historical Data
+
+on:
+  workflow_dispatch: # Allows manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: pip install pandas numpy fastparquet zstandard pyarrow
+
+      - name: Run optimization script
+        run: python optimize_historical_data.py
+
+      - name: Commit and push optimized data
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add options_data/ spread/
+          git diff --staged --quiet || git commit -m "Optimize historical data compression and dtypes"
+          git push
