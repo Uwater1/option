@@ -205,7 +205,7 @@ def main():
                     if col in final_ticker_df.columns:
                         final_ticker_df[col] = final_ticker_df[col].astype('category')
                 float_cols = final_ticker_df.select_dtypes(include=['float64']).columns
-                final_ticker_df[float_cols] = final_ticker_df[float_cols].astype(np.float32)
+                final_ticker_df[float_cols] = final_ticker_df[float_cols].astype('float32')
 
                 final_ticker_df.to_parquet(file_path, index=False, compression='zstd')
                 print(f"Successfully saved {ticker_symbol} spread data to {file_path}")
