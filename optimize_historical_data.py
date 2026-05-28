@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import numpy as np
 import pathlib
+import pyarrow.parquet as pq
 
 def optimize_dataframe(df):
     """
@@ -61,7 +62,9 @@ def migrate_folder(input_dir):
     for i, parquet_path in enumerate(parquet_files, 1):
         try:
             # Read Parquet
-            df = pd.read_parquet(parquet_path)
+            table = pq.read_table(parquet_path)
+            table = table.replace_schema_metadata({})
+            df = table.to_pandas()
 
             # Optimize
             df = optimize_dataframe(df)
