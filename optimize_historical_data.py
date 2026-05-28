@@ -18,6 +18,17 @@ def optimize_dataframe(df):
         df['inTheMoney'] = df['inTheMoney'].astype(np.int8)
 
     # 3. Float32 for all numerical columns
+    # We include float32 in the selection to re-cast and ensure consistency,
+    # and also cover common column names just in case they were object/int
+    num_cols = [
+        'strike', 'lastPrice', 'bid', 'ask', 'volume', 'openInterest',
+        'IV_yf', 'underlyingPriceAtTrade', 'impliedVolatility',
+        'riskFreeRate', 'volatilityIndex', 'bid_ask_spread', 'days_to_expire'
+    ]
+    for col in num_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce').astype(np.float32)
+
     float_cols = df.select_dtypes(include=['float64']).columns
     df[float_cols] = df[float_cols].astype(np.float32)
 

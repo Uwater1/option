@@ -287,28 +287,52 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
         if col in df.columns:
             df[col] = df[col].astype('category')
 
-    # 6. Add underlying price at lastTradeDate (using cached intraday data)
+    # 6. Add underlying price and volatility index at lastTradeDate (vectorized)
     if 'lastTradeDate' in df.columns:
-        # Pre-fetch all unique trade dates for this ticker (one API call per date)
-        unique_dates = df['lastTradeDate'].dropna().apply(
-            lambda x: x.strftime('%Y-%m-%d') if hasattr(x, 'strftime') else str(x)[:10]
-        ).unique()
+        df['lastTradeDate'] = pd.to_datetime(df['lastTradeDate'], utc=True)
+        df = df.sort_values('lastTradeDate')
 
-        now = pd.Timestamp.now(tz='UTC')
+        # Pre-fetch all unique trade dates for this ticker to ensure we have historical intraday data
+        unique_dates = df['lastTradeDate'].dt.strftime('%Y-%m-%d').unique()
+
+        # Merge intraday data for all relevant dates
+        ticker_hist_list = []
+        vol_hist_list = []
+
         for d in unique_dates:
-            try:
-                dt = pd.Timestamp(d, tz='UTC')
-                if (now - dt).days <= 5:
-                    _get_intraday_data(ticker_symbol, d)
-            except Exception:
-                pass
+            ticker_hist_list.append(_get_intraday_data(ticker_symbol, d))
+            if vol_index_symbol:
+                vol_hist_list.append(_get_intraday_data(vol_index_symbol, d))
 
-        #print(f"    Looking up underlying prices at trade times ({len(unique_dates)} unique dates)...")
-        df['underlyingPriceAtTrade'] = df['lastTradeDate'].apply(
-            lambda x: get_stock_price_at_time(ticker_symbol, x, current_price) if pd.notna(x) else np.float32(np.nan)
-        ).astype(np.float32)
+        ticker_hist = pd.concat(ticker_hist_list).sort_index() if ticker_hist_list else pd.DataFrame()
+        vol_hist = pd.concat(vol_hist_list).sort_index() if vol_hist_list else pd.DataFrame()
 
-    # 6. Calculate Black-Scholes IV using custom risk-free rate (vectorized)
+        # Underlying price lookup
+        if not ticker_hist.empty:
+            df = pd.merge_asof(
+                df,
+                ticker_hist[['Close']].rename(columns={'Close': 'underlyingPriceAtTrade'}),
+                left_on='lastTradeDate',
+                right_index=True,
+                direction='nearest'
+            )
+        else:
+            df['underlyingPriceAtTrade'] = np.float32(current_price)
+
+        # Volatility index lookup
+        if vol_index_symbol:
+            if not vol_hist.empty:
+                df = pd.merge_asof(
+                    df,
+                    vol_hist[['Close']].rename(columns={'Close': 'volatilityIndex'}),
+                    left_on='lastTradeDate',
+                    right_index=True,
+                    direction='nearest'
+                )
+            else:
+                df['volatilityIndex'] = np.float32(np.nan)
+
+    # 7. Calculate Black-Scholes IV using custom risk-free rate (vectorized)
     exp_dt = pd.to_datetime(expiration_date).tz_localize('UTC')
     
     if 'lastTradeDate' in df.columns:
@@ -334,29 +358,15 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
     #print(f"    Calculating Black-Scholes IV (n={len(df)}, r={risk_free_rate:.4f}, type={option_type})...")
     df['impliedVolatility'] = calculate_iv_vectorized(mp_arr, S_arr, K_arr, T_arr, float(risk_free_rate), is_call)
 
-    # 7. Add risk-free rate column
+    # 8. Add risk-free rate column
     df['riskFreeRate'] = np.float32(risk_free_rate)
-
-    # 8. Add volatility index value
-    if vol_index_symbol:
-        #print(f"    Adding volatility index ({vol_index_symbol})...")
-        if 'lastTradeDate' in df.columns:
-            df['volatilityIndex'] = df['lastTradeDate'].apply(
-                lambda x: get_stock_price_at_time(vol_index_symbol, x, np.nan) if pd.notna(x) else np.float32(np.nan)
-            ).astype(np.float32)
-        else:
-            # Fallback to current value if no trade date column (though we expect one)
-            vol_tk = yf.Ticker(vol_index_symbol)
-            vol_hist = vol_tk.history(period="1d")
-            vol_val = vol_hist['Close'].iloc[-1] if not vol_hist.empty else np.nan
-            df['volatilityIndex'] = np.float32(vol_val)
 
     # 9. Final dtype optimization and compression prep
     if 'lastTradeDate' in df.columns:
-        df['lastTradeDate'] = pd.to_datetime(df['lastTradeDate'], utc=True).dt.tz_localize(None)
+        df['lastTradeDate'] = df['lastTradeDate'].dt.tz_localize(None)
 
     # Ensure all float columns are float32
-    float_cols = df.select_dtypes(include=['float64']).columns
+    float_cols = df.select_dtypes(include=['float64', 'float32']).columns
     df[float_cols] = df[float_cols].astype(np.float32)
 
     return df
