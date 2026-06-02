@@ -319,6 +319,14 @@ def process_options_df(df, ticker_symbol, current_price, risk_free_rate, expirat
         df_with_date = df[df['lastTradeDate'].notna()].copy()
         df_no_date = df[df['lastTradeDate'].isna()].copy()
 
+        # Align timezone-aware datetime types to avoid MergeError (e.g., [s] vs [us])
+        if not df_with_date.empty:
+            df_with_date['lastTradeDate'] = pd.to_datetime(df_with_date['lastTradeDate'], utc=True).astype('datetime64[ns, UTC]')
+        if not ticker_hist.empty:
+            ticker_hist.index = pd.to_datetime(ticker_hist.index, utc=True).astype('datetime64[ns, UTC]')
+        if not vol_hist.empty:
+            vol_hist.index = pd.to_datetime(vol_hist.index, utc=True).astype('datetime64[ns, UTC]')
+
         # Underlying price lookup
         if not ticker_hist.empty and not df_with_date.empty:
             df_with_date = pd.merge_asof(
