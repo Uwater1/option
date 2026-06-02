@@ -22,7 +22,6 @@ TICKERS = {
     "avgo": "AVGO",
     "pltr": "PLTR",
     "btc": "IBIT",   # iShares Bitcoin Trust ETF
-    "eth": "ETHA",   # iShares Ethereum Trust ETF
     "gold": "GLD",   # SPDR Gold Shares ETF
     "silver": "SLV", # iShares Silver Trust ETF
     "oilstock": "XLE",    # Oil stock
