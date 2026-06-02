@@ -34,7 +34,6 @@ VOLATILITY_MAP = {
     "SPY": "^VIX",
     "QQQ": "^VXN",
     "GLD": "^GVZ",
-    "DIA": "^VXD",
     "AMZN": "^VXAZN",
     "AAPL": "^VXAPL",
     "GOOG": "^VXGOG",
