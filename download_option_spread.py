@@ -76,6 +76,14 @@ def download_expiration(tk, ticker_symbol, date, current_price, vol_current_pric
             df['lastTradeDate'] = pd.to_datetime(df['lastTradeDate'], utc=True)
             df = df.sort_values('lastTradeDate')
             
+            # Align timezone-aware datetime types to avoid MergeError (e.g., [s] vs [us])
+            if not df.empty:
+                df['lastTradeDate'] = pd.to_datetime(df['lastTradeDate'], utc=True).astype('datetime64[ns, UTC]')
+            if not ticker_hist.empty:
+                ticker_hist.index = pd.to_datetime(ticker_hist.index, utc=True).astype('datetime64[ns, UTC]')
+            if not vol_hist.empty:
+                vol_hist.index = pd.to_datetime(vol_hist.index, utc=True).astype('datetime64[ns, UTC]')
+
             # Vectorized price lookup using merge_asof for underlyingPriceAtTrade
             if not ticker_hist.empty:
                 df = pd.merge_asof(
